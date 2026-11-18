@@ -1,5 +1,5 @@
 {
-  "ultima_busqueda": 1795016349.2935922,
+  "ultima_busqueda": 1795020470.2204657,
   "ofertas": {
     "2fad22fc09e4119794017aba6f71bb573b0db60d54bece65362b25b6f28b0252": {
       "precio": 369.06,
@@ -22,8 +22,8 @@
       "ultima_alerta": null
     },
     "77aee1dd06465adacfec9c740952141814d761be4d27b35b048c0b40a18ad7f2": {
-      "precio": 372.24,
-      "ultima_alerta": null
+      "precio": 368.06,
+      "ultima_alerta": "2026-11-18T16:46:36.207596+00:00"
     },
     "c9465661e648c68b24a0f7568b12a268d3308242ccb4ccab5d84ecadabe1a52d": {
       "precio": 373.24,
@@ -99,6 +99,22 @@
     },
     "2f8632c7de313992ef2b5df240d3cb81fb8b5969a6a0996faf8d04b0852dee9d": {
       "precio": 343.15,
+      "ultima_alerta": null
+    },
+    "76ea07881d741fafe927e4c0eaa547a71d7376ee79795f0ea60e6bc048b7bbbc": {
+      "precio": 154.4,
+      "ultima_alerta": "2026-11-18T16:46:36.586683+00:00"
+    },
+    "bf6fcd5c2b33deca68e190067564c3a2fb6649bb18a1edbfddae486123365dc7": {
+      "precio": 324.45,
+      "ultima_alerta": "2026-11-18T16:46:36.972633+00:00"
+    },
+    "146547a9f0684f49b05988ce0a1682c2d7242481a852ba20e713be0507e93e0d": {
+      "precio": 504.5,
+      "ultima_alerta": null
+    },
+    "d44977e923676d88f421e63408cb64cc192124d5759216d087b90b22863eeac1": {
+      "precio": 404.5,
       "ultima_alerta": null
     }
   }

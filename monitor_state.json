@@ -1,5 +1,5 @@
 {
-  "ultima_busqueda": 1795012801.3396409,
+  "ultima_busqueda": 1795013042.2309244,
   "ofertas": {
     "2fad22fc09e4119794017aba6f71bb573b0db60d54bece65362b25b6f28b0252": {
       "precio": 369.06,
@@ -34,8 +34,8 @@
       "ultima_alerta": null
     },
     "cbf8191be09fd2bea3fea7d6e4f8d62ccef90eb8d55233037cb4d22cb55bdcea": {
-      "precio": 376.24,
-      "ultima_alerta": null
+      "precio": 373.24,
+      "ultima_alerta": "2026-11-18T14:42:46.238107+00:00"
     },
     "0b7e5b1fede798640082961c0d52dbbfc9cb61c3edb57168a2da4f87e172080e": {
       "precio": 376.24,

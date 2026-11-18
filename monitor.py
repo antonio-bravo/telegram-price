@@ -5,11 +5,14 @@ import os
 import re
 import sys
 import time
+import random  # <-- ASEGÚRATE DE QUE ESTÉ
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
+import urllib3  # <-- AÑADIDO PARA REINTENTOS ROBUSTOS
+from requests.adapters import HTTPAdapter
 from ddgs import DDGS
 
 
@@ -46,15 +49,45 @@ COLUMNAS_CSV = [
     "url",
 ]
 
-HEADERS_HTTP = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
+# ============================================================
+# USER-AGENTS ROTATORIOS Y HEADERS REALISTAS
+# ============================================================
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+]
+
+BASE_HEADERS = {
     "Accept-Language": "es-ES,es;q=0.9,en;q=0.8,de;q=0.7,fr;q=0.6",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
 }
 
+def get_robust_session():
+    """Crea una sesión de requests con reintentos exponenciales y forzando HTTP/1.1"""
+    session = requests.Session()
+    # Configuración de reintentos: 3 intentos, esperando 2s, 4s, 8s (backoff exponencial)
+    retry_strategy = urllib3.util.Retry(
+        total=3,
+        backoff_factor=2,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["HEAD", "GET", "OPTIONS"]
+    )
+    adapter = HTTPAdapter(max_retries=retry_strategy)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 # ============================================================
 # CARGA DE CONFIGURACION Y ESTADO
@@ -302,7 +335,15 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
     if es_marketplace_c2c:
         descartes_c2c = [
             # PALABRAS CLAVE DE VENDIDO/RESERVADO (AÑADIDO)
-            "vendido", "vendida", "reservado", "reservada", "sold", "reserved",
+            "vendido", "vendida", "reservado", "reservada", "no disponible", "ya no está",
+            # Inglés
+            "sold", "sold out", "reserved", "no longer available",
+            # Alemán
+            "verkauft", "reserviert", "nicht verfügbar",
+            # Francés
+            "vendu", "vendue", "réservé", "réservée", "non disponible",
+            # Italiano
+            "venduto", "venduta", "riservato", "non disponibile",
             # Piezas rotas o accesorios
             "para piezas", "averiado", "averiada", "no funciona",
             "roto", "rota", "defectuoso", "defectuosa", "con fallos",
@@ -638,7 +679,7 @@ def procesar_oferta(producto, oferta, config, estado):
 
 def generar_consultas(producto, config):
     busqueda = producto.get("busqueda", "").strip()
-    buscar_europa = config.get("solo_union_europea", True) # Usamos la clave unificada
+    buscar_europa = config.get("solo_union_europea", True)
     consultas = []
 
     tokens = busqueda.split()
@@ -648,35 +689,39 @@ def generar_consultas(producto, config):
     ]
 
     if modelos:
-        modelo = modelos[0]
-        consultas.append((f'"{modelo}" amazon', "es-es"))
-        consultas.append((f'"{modelo}" pccomponentes', "es-es"))
-        consultas.append((f'"{modelo}" precio', "es-es"))
+        modelo_completo = modelos[0]
+        # Clave: Separamos el modelo por el guion. Ej: "WD69EFPX-SPC5ZN0" -> "WD69EFPX"
+        modelo_base = modelo_completo.split("-")[0] 
+
+        # PARA AMAZON: Sin comillas y usando el modelo base (más flexible, evita que DDG no encuentre nada)
+        consultas.append((f"{modelo_base} amazon", "es-es"))
+        consultas.append((f"{modelo_completo} pccomponentes", "es-es")) # PcComponentes sí suele tener el modelo completo
+        consultas.append((f"{modelo_base} precio", "es-es"))
 
         if buscar_europa:
-            consultas.append((f'"{modelo}" amazon.de', "de-de"))
-            consultas.append((f'"{modelo}" amazon.fr', "fr-fr"))
-            consultas.append((f'"{modelo}" amazon.it', "it-it"))
-            consultas.append((f'"{modelo}" geizhals.eu OR geizhals.de', "de-de"))
-            consultas.append((f'"{modelo}" idealo.de OR idealo.es OR idealo.fr', "de-de"))
-            consultas.append((f'"{modelo}" envio españa OR versand spanien', "es-es"))
+            consultas.append((f"{modelo_base} amazon.de", "de-de"))
+            consultas.append((f"{modelo_base} amazon.fr", "fr-fr"))
+            consultas.append((f"{modelo_base} amazon.it", "it-it"))
+            consultas.append((f"{modelo_base} geizhals.eu OR geizhals.de", "de-de"))
+            consultas.append((f"{modelo_base} idealo.de OR idealo.es OR idealo.fr", "de-de"))
+            consultas.append((f"{modelo_base} envio españa OR versand spanien", "es-es"))
 
-        # Marketplaces C2C: FORZAMOS DOMINIOS UE Y EXCLUIMOS EXPLÍCITAMENTE UK (.co.uk)
+        # Marketplaces C2C: Aquí SÍ usamos comillas y el modelo completo, y añadimos los filtros de "vendido"
         if config.get("incluir_wallapop_vinted", True):
-            consultas.append((f'"{modelo}" (site:wallapop.com OR site:es.wallapop.com) -site:wallapop.co.uk', "es-es"))
-            consultas.append((f'"{modelo}" (site:vinted.es OR site:vinted.fr OR site:vinted.it OR site:vinted.de) -site:vinted.co.uk', "es-es"))
-            consultas.append((f'"{modelo}" wallapop -uk -co.uk', "es-es"))
-            consultas.append((f'"{modelo}" vinted -uk -co.uk', "es-es"))
+            consultas.append((f'"{modelo_completo}" (site:wallapop.com OR site:es.wallapop.com) -vendido -reservado -sold -site:wallapop.co.uk', "es-es"))
+            consultas.append((f'"{modelo_completo}" (site:vinted.es OR site:vinted.fr OR site:vinted.it OR site:vinted.de) -vendido -reservado -sold -site:vinted.co.uk', "es-es"))
+            consultas.append((f'"{modelo_completo}" wallapop -vendido -reservado -uk -co.uk', "es-es"))
+            consultas.append((f'"{modelo_completo}" vinted -vendido -reservado -uk -co.uk', "es-es"))
 
-        consultas.append((f'"{modelo}"', "es-es"))
+        consultas.append((f'"{modelo_completo}"', "es-es"))
         if buscar_europa:
-            consultas.append((f'"{modelo}"', "de-de"))
+            consultas.append((f'"{modelo_completo}"', "de-de"))
     else:
         consultas.append((f"{busqueda} precio", "es-es"))
         consultas.append((f"{busqueda} amazon", "es-es"))
         if config.get("incluir_wallapop_vinted", True):
-            consultas.append((f"{busqueda} wallapop -uk -co.uk", "es-es"))
-            consultas.append((f"{busqueda} vinted -uk -co.uk", "es-es"))
+            consultas.append((f"{busqueda} wallapop -vendido -reservado -uk -co.uk", "es-es"))
+            consultas.append((f"{busqueda} vinted -vendido -reservado -uk -co.uk", "es-es"))
         if buscar_europa:
             consultas.append((f"{busqueda} amazon.de", "de-de"))
             consultas.append((f"{busqueda} geizhals", "de-de"))
@@ -692,7 +737,6 @@ def generar_consultas(producto, config):
             unicas.append((c, reg))
     return unicas
 
-
 def buscar_en_ddgs(buscador, consulta, region):
     for backend in ["auto", "lite", "html"]:
         try:
@@ -707,18 +751,51 @@ def buscar_en_ddgs(buscador, consulta, region):
 
 
 def consultar_url_directa(url, producto, config):
+    session = get_robust_session()
+    
+    # Copiamos los headers base y asignamos un User-Agent aleatorio para esta petición
+    headers = BASE_HEADERS.copy()
+    headers["User-Agent"] = random.choice(USER_AGENTS)
+    
     try:
-        respuesta = requests.get(url, headers=HEADERS_HTTP, timeout=15)
+        # timeout=(5.0, 15.0) significa 5s para conectar, 15s para leer la respuesta
+        respuesta = session.get(url, headers=headers, timeout=(5.0, 15.0))
+        
         if respuesta.status_code != 200:
             return None
+            
         texto = respuesta.text
+        
+        # ============================================================
+        # NUEVO: FILTRO DE DISPONIBILIDAD PARA WALLAPOP Y VINTED
+        # ============================================================
+        if "wallapop" in url.lower() or "vinted" in url.lower():
+            # 1. Comprobar el título de la página (muy fiable, cambia al venderse)
+            titulo_pagina = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
+            if titulo_pagina:
+                titulo = titulo_pagina.group(1).lower()
+                palabras_no_disponible = ["vendido", "reservado", "sold", "vendu", "verkauft", "no disponible", "non disponible"]
+                if any(palabra in titulo for palabra in palabras_no_disponible):
+                    print(f"   ⏭️ Descartado (Vendido/Reservado en título): {url}")
+                    return None
+            
+            # 2. Comprobar si el estado en la página indica claramente que está vendido
+            # (Busca patrones como "Estado: Vendido" para evitar falsos positivos en anuncios laterales)
+            if re.search(r'(?:estado|statut|status).*?:.*?(?:vendido|sold|verkauft|vendu|reservado|réservé)', texto, re.IGNORECASE):
+                print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
+                return None
+        # ============================================================
+
         precio = extraer_precio(texto)
         if not precio:
             return None
+            
         tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
         envio = extraer_envio(texto)
+        
         if envio is None and "Amazon España" in tienda_nombre and precio >= 35.0:
             envio = 0.0
+            
         return {
             "producto_id": producto["id"],
             "producto": producto["nombre"],
@@ -731,15 +808,55 @@ def consultar_url_directa(url, producto, config):
             "url": url,
             "titulo": producto["nombre"],
         }
-    except Exception:
+    except requests.exceptions.ConnectionError as e:
+        # Si tras 3 reintentos sigue fallando (ej. IP de GitHub bloqueada), lo registramos
+        print(f"   ⚠️ Conexión rechazada tras varios intentos en {urlparse(url).netloc}: {e}")
         return None
-
+    except Exception as e:
+        print(f"   ⚠️ Error inesperado en {url}: {e}")
+        return None
 
 def buscar_producto(producto, pais_default, config):
     consultas = generar_consultas(producto, config)
     resultados = []
     vistos = set()
 
+    # ============================================================
+    # ATAJO: BÚSQUEDA DIRECTA EN AMAZON (By-passea a DuckDuckGo)
+    # ============================================================
+    modelo_busqueda = producto.get("busqueda", "").strip()
+    if modelo_busqueda and config.get("solo_union_europea", True):
+        import urllib.parse
+        query_encoded = urllib.parse.quote(modelo_busqueda)
+        amazon_search_url = f"https://www.amazon.es/s?k={query_encoded}&i=electronics"
+        
+        print(f"   🔎 Buscando modelo exacto directamente en Amazon.es...")
+        try:
+            session = get_robust_session()
+            headers = BASE_HEADERS.copy()
+            headers["User-Agent"] = random.choice(USER_AGENTS)
+            
+            # Visitamos la página de resultados de Amazon
+            resp = session.get(amazon_search_url, headers=headers, timeout=15.0)
+            
+            # Buscamos el primer enlace de producto real (patrón /dp/ASIN)
+            primer_producto = re.search(r'(https://www\.amazon\.es/.*?/dp/([A-Z0-9]{10}))', resp.text)
+            
+            if primer_producto:
+                url_producto_real = primer_producto.group(1).split("?")[0] # Limpiamos parámetros
+                if url_producto_real not in vistos:
+                    print(f"   🔗 Producto encontrado, visitando URL real: {url_producto_real}")
+                    directa_amazon = consultar_url_directa(url_producto_real, producto, config)
+                    if directa_amazon:
+                        vistos.add(directa_amazon["url"])
+                        resultados.append(directa_amazon)
+            else:
+                print("   ⚠️ No se encontraron productos directos en Amazon.es para este modelo.")
+        except Exception as e:
+            print(f"   ⚠️ Error en búsqueda directa Amazon: {e}")
+    # ============================================================
+
+    # URLs fijas configuradas en el JSON
     urls_fijas = []
     if producto.get("url"):
         urls_fijas.append(producto["url"])
@@ -751,7 +868,9 @@ def buscar_producto(producto, pais_default, config):
         if directa:
             vistos.add(directa["url"])
             resultados.append(directa)
+        time.sleep(random.uniform(1.0, 2.5))
 
+    # Búsqueda con DuckDuckGo (para PcComponentes, Wallapop, Vinted, etc.)
     try:
         with DDGS() as buscador:
             for consulta, region in consultas:
@@ -765,10 +884,33 @@ def buscar_producto(producto, pais_default, config):
                     descripcion = res.get("body", "")
                     texto = f"{titulo} {descripcion}"
 
+                    # 1. Intentamos extraer precio del resumen de DuckDuckGo
                     precio = extraer_precio(texto)
-                    if precio is None:
-                        continue
 
+                    # 2. LÓGICA DE RESPALDO: Si no hay precio, pero es tienda fiable, visitamos
+                    if precio is None:
+                        tiendas_fiables = [
+                            "amazon.de", "amazon.fr", "amazon.it", "amazon.nl",
+                            "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
+                            "geizhals", "idealo", "wallapop", "vinted"
+                        ]
+                        # Nota: amazon.es ya lo manejamos arriba, pero lo dejamos por si acaso
+                        es_tienda_fiable = any(tienda in url.lower() for tienda in tiendas_fiables)
+                        
+                        termino_busqueda = producto.get("busqueda", "").lower()
+                        palabras_clave = termino_busqueda.split()[:2] 
+                        coincide_modelo = all(palabra in titulo.lower() for palabra in palabras_clave)
+
+                        if es_tienda_fiable and coincide_modelo:
+                            print(f"   🔍 Precio no visible en resumen DDG, visitando URL directa: {url}")
+                            directa = consultar_url_directa(url, producto, config)
+                            if directa:
+                                resultados.append(directa)
+                                vistos.add(url)
+                        
+                        continue # Pasamos al siguiente resultado de DDG
+
+                    # 3. Si SÍ había precio en el resumen, seguimos con el flujo normal
                     if not es_resultado_valido(producto, titulo, descripcion, precio, config, url):
                         continue
 
@@ -792,12 +934,13 @@ def buscar_producto(producto, pais_default, config):
                         "url": url,
                         "titulo": titulo,
                     })
-                time.sleep(1.0)
+                
+                time.sleep(random.uniform(2.5, 5.0))
+                
     except Exception as error:
         print(f"Error general en buscador para '{producto['nombre']}': {error}")
 
     return resultados
-
 
 # ============================================================
 # PROGRAMA PRINCIPAL
@@ -844,7 +987,8 @@ def main():
         for oferta in ofertas:
             procesar_oferta(producto, oferta, config, estado)
 
-        time.sleep(1.5)
+        # time.sleep(1.5)
+        time.sleep(random.uniform(3.0, 6.0)) # Pausa más larga entre productos diferentes
 
     # Guardamos el estado solo para recordar qué ofertas ya fueron notificadas
     guardar_estado(estado)

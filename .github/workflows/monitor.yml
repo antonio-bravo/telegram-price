@@ -2,7 +2,7 @@ name: check precios
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: 17 * * * *
   push:
     branches:
       - main

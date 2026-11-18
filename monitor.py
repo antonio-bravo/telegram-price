@@ -158,13 +158,22 @@ def convertir_numero(texto):
 
 
 def extraer_precio(texto):
+    # 1. ELIMINAR FALSOS POSITIVOS DE FILTROS LATERALES 
+    # (ej: "menos de 25 €", "under 25 €", "unter 25 €")
+    texto_limpio = re.sub(
+        r'(?:under|moins de|sous|menos de|unter|less than|sotto|gifts under|regalos por debajo de|cadeaux de moins de)\s+\d+(?:[.,]\d+)?\s*(?:€|eur|euros?)', 
+        '', 
+        texto, 
+        flags=re.IGNORECASE
+    )
+    
     patrones = [
         r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*€",
         r"€\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)",
         r"(\d+(?:[.,]\d{1,2})?)\s*(?:EUR|euros?)\b",
     ]
     for patron in patrones:
-        for coincidencia in re.finditer(patron, texto, re.IGNORECASE):
+        for coincidencia in re.finditer(patron, texto_limpio, re.IGNORECASE):
             try:
                 precio = convertir_numero(coincidencia.group(1))
                 if 1 <= precio <= 100000:
@@ -372,9 +381,10 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
     else:
         tokens = producto.get("busqueda", "").split()
         for token in tokens:
-            if re.search(r"[A-Za-z]", token) and re.search(r"\d", token) and len(token) >= 5:
-                if token.lower() not in texto:
-                    return False
+            # CAMBIO: Exigimos que CUALQUIER token de más de 2 caracteres esté en el texto.
+            # Antes se ignoraba "64" porque no tenía letras. Ahora se exige su presencia.
+            if len(token) >= 3 and token.lower() not in texto:
+                return False
 
     # 4. Comprobar precio mínimo razonable
     precio_min = producto.get("precio_minimo_unidad")

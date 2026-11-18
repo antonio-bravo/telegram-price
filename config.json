@@ -1,0 +1,33 @@
+{
+  "intervalo_minutos": 60,
+  "pais": "España",
+  "moneda": "EUR",
+  "incluir_envio": true,
+  "notificar_bajadas": true,
+  "solo_nuevas_ofertas": true,
+
+  "productos": [
+    {
+      "id": "wd-red-8tb",
+      "nombre": "WD Red Plus 8TB",
+      "busqueda": "WD80EFPX disco duro NAS 8TB",
+      "precio_maximo_unidad": 160,
+      "precio_maximo_pedido": 310,
+      "precio_maximo_por_unidad_medida": 40,
+      "unidad_medida": "TB",
+      "cantidad": 2,
+      "activo": true
+    },
+    {
+      "id": "iphone",
+      "nombre": "iPhone",
+      "busqueda": "Apple iPhone 17 256GB nuevo",
+      "precio_maximo_unidad": 700,
+      "precio_maximo_pedido": null,
+      "precio_maximo_por_unidad_medida": null,
+      "unidad_medida": null,
+      "cantidad": 1,
+      "activo": false
+    }
+  ]
+}

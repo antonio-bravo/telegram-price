@@ -1,5 +1,5 @@
 {
-  "ultima_busqueda": 1795012549.8881702,
+  "ultima_busqueda": 1795012801.3396409,
   "ofertas": {
     "2fad22fc09e4119794017aba6f71bb573b0db60d54bece65362b25b6f28b0252": {
       "precio": 369.06,
@@ -87,6 +87,18 @@
     },
     "8ffb75abd539d1c5be5c19d67035cca802821d34e4d43ba25deb4d61bc61980c": {
       "precio": 342.15,
+      "ultima_alerta": null
+    },
+    "d744afc871005321f412f88eb09320e5b166cd91c262389a4b180266f54a2a22": {
+      "precio": 317.85,
+      "ultima_alerta": null
+    },
+    "3ccbcfc80699cd20f6e2da383390c97228a299a40b7457da410b5289228b5835": {
+      "precio": 343.15,
+      "ultima_alerta": null
+    },
+    "2f8632c7de313992ef2b5df240d3cb81fb8b5969a6a0996faf8d04b0852dee9d": {
+      "precio": 343.15,
       "ultima_alerta": null
     }
   }

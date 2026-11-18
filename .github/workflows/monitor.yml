@@ -43,14 +43,7 @@ jobs:
         run: python monitor.py
 
       - name: Guardar histórico y estado
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add historico.csv monitor_state.json
-
-          if ! git diff --cached --quiet; then
-            git commit -m "Actualizar histórico de precios [skip ci]"
-            git pull --rebase origin main
-            git push
-          fi
+        uses: ./.github/actions/commit-and-push
+        with:
+          files: historico.csv monitor_state.json
+          commit_message: "Actualizar histórico de precios [skip ci]"

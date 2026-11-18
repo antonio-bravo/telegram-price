@@ -693,52 +693,37 @@ def generar_consultas(producto, config):
     consultas = []
 
     tokens = busqueda.split()
-    modelos = [
-        t for t in tokens
-        if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 5
-    ]
+    modelos = [t for t in tokens if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 5]
 
     if modelos:
         modelo_completo = modelos[0]
-        # Clave: Separamos el modelo por el guion. Ej: "WD69EFPX-SPC5ZN0" -> "WD69EFPX"
         modelo_base = modelo_completo.split("-")[0] 
 
-        # PARA AMAZON: Sin comillas y usando el modelo base (más flexible, evita que DDG no encuentre nada)
-        consultas.append((f"{modelo_base} amazon", "es-es"))
-        consultas.append((f"{modelo_completo} pccomponentes", "es-es")) # PcComponentes sí suele tener el modelo completo
-        consultas.append((f"{modelo_base} precio", "es-es"))
-
+        # 1. BÚSQUEDA AGRUPADA EUROPA (Reemplaza 6 búsquedas por 1 sola)
         if buscar_europa:
-            consultas.append((f"{modelo_base} amazon.de", "de-de"))
-            consultas.append((f"{modelo_base} amazon.fr", "fr-fr"))
-            consultas.append((f"{modelo_base} amazon.it", "it-it"))
-            consultas.append((f"{modelo_base} geizhals.eu OR geizhals.de", "de-de"))
-            consultas.append((f"{modelo_base} idealo.de OR idealo.es OR idealo.fr", "de-de"))
-            consultas.append((f"{modelo_base} envio españa OR versand spanien", "es-es"))
+            consultas.append((
+                f'"{modelo_base}" (site:amazon.es OR site:amazon.de OR site:amazon.fr OR site:amazon.it OR site:pccomponentes.com OR site:geizhals.eu OR site:idealo.es)', 
+                "es-es"
+            ))
+        
+        # 2. BÚSQUEDA GENERAL DE PRECIO
+        consultas.append((f'"{modelo_base}" precio OR oferta', "es-es"))
 
-        # Marketplaces C2C: Aquí SÍ usamos comillas y el modelo completo, y añadimos los filtros de "vendido"
+        # 3. MARKETPLACES C2C (Wallapop / Vinted) - Agrupados y con filtros de vendido
         if config.get("incluir_wallapop_vinted", True):
-            consultas.append((f'"{modelo_completo}" (site:wallapop.com OR site:es.wallapop.com) -vendido -reservado -sold -site:wallapop.co.uk', "es-es"))
-            consultas.append((f'"{modelo_completo}" (site:vinted.es OR site:vinted.fr OR site:vinted.it OR site:vinted.de) -vendido -reservado -sold -site:vinted.co.uk', "es-es"))
-            consultas.append((f'"{modelo_completo}" wallapop -vendido -reservado -uk -co.uk', "es-es"))
-            consultas.append((f'"{modelo_completo}" vinted -vendido -reservado -uk -co.uk', "es-es"))
-
-        consultas.append((f'"{modelo_completo}"', "es-es"))
-        if buscar_europa:
-            consultas.append((f'"{modelo_completo}"', "de-de"))
+            consultas.append((
+                f'"{modelo_completo}" (site:wallapop.com OR site:es.wallapop.com OR site:vinted.es OR site:vinted.fr) -vendido -reservado -sold -site:.co.uk', 
+                "es-es"
+            ))
+        
+        # 4. BÚSQUEDA DE RESPALDO (Sin comillas, más amplia)
+        consultas.append((f'{modelo_base} comprar', "es-es"))
     else:
-        consultas.append((f"{busqueda} precio", "es-es"))
-        consultas.append((f"{busqueda} amazon", "es-es"))
+        consultas.append((f"{busqueda} precio OR oferta", "es-es"))
         if config.get("incluir_wallapop_vinted", True):
-            consultas.append((f"{busqueda} wallapop -vendido -reservado -uk -co.uk", "es-es"))
-            consultas.append((f"{busqueda} vinted -vendido -reservado -uk -co.uk", "es-es"))
-        if buscar_europa:
-            consultas.append((f"{busqueda} amazon.de", "de-de"))
-            consultas.append((f"{busqueda} geizhals", "de-de"))
-        consultas.append((busqueda, "es-es"))
-        if buscar_europa:
-            consultas.append((busqueda, "de-de"))
+            consultas.append((f"{busqueda} (site:wallapop.com OR site:vinted.es) -vendido -reservado", "es-es"))
 
+    # Eliminar duplicados
     vistos = set()
     unicas = []
     for c, reg in consultas:
@@ -748,13 +733,13 @@ def generar_consultas(producto, config):
     return unicas
 
 def buscar_en_ddgs(buscador, consulta, region):
-    for backend in ["auto", "lite", "html"]:
+    # Solo intentamos 'auto' y, si falla, 'html'. 'lite' a veces da formatos raros.
+    # max_results=6 es suficiente y mucho más rápido que 15.
+    for backend in ["auto", "html"]:
         try:
-            res = buscador.text(consulta, region=region, backend=backend, max_results=15)
+            res = buscador.text(consulta, region=region, backend=backend, max_results=6)
             if res:
-                lista = list(res)
-                if lista:
-                    return lista
+                return list(res)
         except Exception:
             continue
     return []
@@ -769,7 +754,7 @@ def consultar_url_directa(url, producto, config):
     
     try:
         # timeout=(5.0, 15.0) significa 5s para conectar, 15s para leer la respuesta
-        respuesta = session.get(url, headers=headers, timeout=(5.0, 15.0))
+        respuesta = session.get(url, headers=headers, timeout=(3.0, 8.0))
         
         if respuesta.status_code != 200:
             return None
@@ -843,7 +828,7 @@ def buscar_producto(producto, pais_default, config):
         if directa:
             vistos.add(directa["url"])
             resultados.append(directa)
-        time.sleep(random.uniform(1.0, 2.5))
+        time.sleep(random.uniform(0.5, 1.5))
 
     # 2. Búsqueda con DuckDuckGo (para PcComponentes, Wallapop, Vinted, Idealo, etc.)
     try:
@@ -916,7 +901,7 @@ def buscar_producto(producto, pais_default, config):
                     })
                 
                 # Pausa humana entre cada consulta de búsqueda
-                time.sleep(random.uniform(2.5, 5.0))
+                time.sleep(random.uniform(1.0, 2.0))
                 
     except Exception as error:
         print(f"Error general en buscador para '{producto['nombre']}': {error}")
@@ -969,7 +954,7 @@ def main():
             procesar_oferta(producto, oferta, config, estado)
 
         # time.sleep(1.5)
-        time.sleep(random.uniform(3.0, 6.0)) # Pausa más larga entre productos diferentes
+        time.sleep(random.uniform(1.5, 3.0)) # Pausa más larga entre productos diferentes
 
     # Guardamos el estado solo para recordar qué ofertas ya fueron notificadas
     guardar_estado(estado)

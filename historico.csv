@@ -1,1 +1,1 @@
-fecha,producto_id,producto,tienda,precio_producto,envio,envio_confirmado,total_unidad_con_envio,cantidad,total_pedido_con_envio,precio_unidad_medida,cumple_objetivo,url
+fecha,producto_id,producto,tienda,pais,precio_producto,envio,envio_confirmado,total_unidad_con_envio,cantidad,total_pedido_con_envio,precio_unidad_medida,cumple_objetivo,url

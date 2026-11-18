@@ -34,6 +34,7 @@ COLUMNAS_CSV = [
     "producto_id",
     "producto",
     "tienda",
+    "pais",
     "precio_producto",
     "envio",
     "envio_confirmado",
@@ -44,6 +45,15 @@ COLUMNAS_CSV = [
     "cumple_objetivo",
     "url",
 ]
+
+HEADERS_HTTP = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8,de;q=0.7,fr;q=0.6",
+}
 
 
 # ============================================================
@@ -57,9 +67,11 @@ def cargar_configuracion():
     config.setdefault("intervalo_minutos", 60)
     config.setdefault("pais", "España")
     config.setdefault("moneda", "EUR")
+    config.setdefault("buscar_en_europa", True)
+    config.setdefault("envio_europa_estimado", 6.50)
     config.setdefault("incluir_envio", True)
-    config.setdefault("exigir_envio_confirmado", True)
-    config.setdefault("envio_por_defecto", None)
+    config.setdefault("exigir_envio_confirmado", False)
+    config.setdefault("envio_por_defecto", 4.50)
     config.setdefault("notificar_bajadas", True)
     config.setdefault("solo_nuevas_ofertas", True)
     config.setdefault("excluir_terminos", list(TERMINOS_EXCLUSION_DEFECTO))
@@ -132,19 +144,23 @@ def extraer_precio(texto):
 
 def extraer_envio(texto):
     """
-    Detecta si el snippet indica expresamente envío gratis o un coste en euros.
-    Devuelve float (0.0 para gratis, >0 si tiene coste) o None si no se menciona.
+    Detecta si el snippet indica envío gratis o un coste en euros en español, inglés, alemán o francés.
     """
     texto_lower = texto.lower()
 
     terminos_gratis = [
-        "envío gratis", "envio gratis",
-        "envío gratuito", "envio gratuito",
-        "portes gratis", "portes gratuitos",
-        "entrega gratis", "entrega gratuita",
+        # Español
+        "envío gratis", "envio gratis", "envío gratuito", "envio gratuito",
+        "portes gratis", "portes gratuitos", "entrega gratis", "entrega gratuita",
         "sin gastos de envío", "sin gastos de envio",
-        "gastos de envío gratis", "gastos de envio gratis",
-        "free shipping", "free delivery"
+        # Inglés
+        "free shipping", "free delivery", "free delivery to spain",
+        # Alemán
+        "kostenlose lieferung", "kostenloser versand", "gratis versand", "versandkostenfrei",
+        # Francés
+        "livraison gratuite", "frais de livraison gratuits", "frais de port gratuits",
+        # Italiano
+        "spedizione gratuita", "consegna gratuita",
     ]
 
     for termino in terminos_gratis:
@@ -152,10 +168,20 @@ def extraer_envio(texto):
             return 0.0
 
     patrones = [
+        # Español
         r"(?:gastos de |coste de )?env[ií]o\s*(?:desde|de|:)?\s*(\d+(?:[.,]\d{1,2})?)\s*€",
         r"(?:gastos de |coste de )?env[ií]o\s*(?:desde|de|:)?\s*€\s*(\d+(?:[.,]\d{1,2})?)",
         r"portes\s*(?:desde|de|:)?\s*(\d+(?:[.,]\d{1,2})?)\s*€",
-        r"(?:shipping|delivery)\s*(?:from|:)?\s*€?\s*(\d+(?:[.,]\d{1,2})?)",
+        # Inglés
+        r"(?:shipping|delivery)(?:\s*to\s*spain)?\s*(?:from|:)?\s*€?\s*(\d+(?:[.,]\d{1,2})?)",
+        # Alemán
+        r"(?:versand|lieferung)(?:\s*nach\s*spanien)?\s*(?:ab|:)?\s*(\d+(?:[.,]\d{1,2})?)\s*€",
+        r"versandkosten\s*(?:ab|:)?\s*(\d+(?:[.,]\d{1,2})?)\s*€",
+        # Francés
+        r"(?:frais de |coût de )?livraison(?:\s*vers\s*l'espagne)?\s*(?:dès|de|:)?\s*(\d+(?:[.,]\d{1,2})?)\s*€",
+        r"frais de port\s*(?:dès|de|:)?\s*(\d+(?:[.,]\d{1,2})?)\s*€",
+        # Italiano
+        r"(?:costi di )?spedizione(?:\s*in\s*spagna)?\s*(?:da|:)?\s*(\d+(?:[.,]\d{1,2})?)\s*€",
     ]
 
     for patron in patrones:
@@ -199,23 +225,71 @@ def extraer_capacidad(texto, unidad):
         return None
 
 
-def obtener_tienda(url):
-    try:
-        return urlparse(url).netloc.lower().removeprefix("www.")
-    except Exception:
-        return "Tienda desconocida"
+def detectar_tienda_y_pais(url):
+    """
+    Identifica la tienda y el país a partir de la URL, marcando si es internacional.
+    """
+    domain = urlparse(url).netloc.lower().removeprefix("www.")
+
+    # Amazon en Europa
+    if "amazon.es" in domain:
+        return "Amazon España", "🇪🇸 España", False
+    if "amazon.de" in domain:
+        return "Amazon Alemania", "🇩🇪 Alemania", True
+    if "amazon.fr" in domain:
+        return "Amazon Francia", "🇫🇷 Francia", True
+    if "amazon.it" in domain:
+        return "Amazon Italia", "🇮🇹 Italia", True
+    if "amazon.nl" in domain:
+        return "Amazon Países Bajos", "🇳🇱 Países Bajos", True
+    if "amazon.com.be" in domain or "amazon.be" in domain:
+        return "Amazon Bélgica", "🇧🇪 Bélgica", True
+
+    # Tiendas destacadas en España
+    if domain.endswith(".es") or any(t in domain for t in ["pccomponentes", "coolmod", "neobyte", "aussar", "senetic"]):
+        return domain, "🇪🇸 España", False
+
+    # Comparadores y distribuidores europeos
+    if "geizhals" in domain:
+        return "Geizhals (Europa)", "🇪🇺 Europa", True
+    if "idealo" in domain:
+        if domain.endswith(".de"):
+            return "Idealo Alemania", "🇩🇪 Alemania", True
+        if domain.endswith(".fr"):
+            return "Idealo Francia", "🇫🇷 Francia", True
+        return "Idealo", "🇪🇺 Europa", True
+    if "alternate" in domain:
+        if domain.endswith(".de"):
+            return "Alternate Alemania", "🇩🇪 Alemania", True
+        return "Alternate", "🇪🇸 España", False
+    if "caseking" in domain:
+        return "Caseking", "🇩🇪 Alemania", True
+    if "ldlc" in domain:
+        return "LDLC", "🇫🇷 Francia", True
+
+    # Por extensión de dominio
+    if domain.endswith(".de"):
+        return domain, "🇩🇪 Alemania", True
+    if domain.endswith(".fr"):
+        return domain, "🇫🇷 Francia", True
+    if domain.endswith(".it"):
+        return domain, "🇮🇹 Italia", True
+    if domain.endswith(".nl"):
+        return domain, "🇳🇱 Países Bajos", True
+
+    return domain, "🇪🇺 Europa", True
 
 
 # ============================================================
 # VALIDACION Y FILTRADO DE RESULTADOS
 # ============================================================
 
-def es_resultado_valido(producto, titulo, descripcion, precio, config):
+def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
     """
     Evita falsos positivos descartando accesorios, reacondicionados
     o resultados que no coincidan con el producto buscado.
     """
-    texto = f"{titulo} {descripcion}".lower()
+    texto = f"{titulo} {descripcion} {url}".lower()
 
     # 1. Comprobar exclusiones (reacondicionados, cables, carcasas, etc.)
     exclusiones = (
@@ -257,25 +331,38 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config):
 # CALCULO DE COSTES Y EVALUACION DE CRITERIOS
 # ============================================================
 
-def calcular_costes(producto, precio, envio, config):
+def calcular_costes(producto, precio, envio, config, es_internacional=False):
     """
     Calcula el coste por unidad y del pedido completo.
-    El envío se aplica una única vez al total del pedido.
+    El envío a España se aplica una única vez al total del pedido.
+    Si la tienda es de fuera de España y no indica el envío exacto,
+    aplica el coste estimado de transporte internacional a España.
     """
     cantidad = int(producto.get("cantidad", 1))
     incluir_envio = config.get("incluir_envio", True)
-    envio_por_defecto = config.get("envio_por_defecto")
+    envio_por_defecto = config.get("envio_por_defecto", 4.50)
+    envio_europa_estimado = config.get("envio_europa_estimado", 6.50)
 
     envio_conocido = envio is not None
     coste_envio = 0.0
+    origen_envio = "Confirmado"
 
     if incluir_envio:
         if envio_conocido:
             coste_envio = float(envio)
+            origen_envio = "GRATIS (0.00 €)" if coste_envio == 0.0 else f"{coste_envio:.2f} € (Confirmado en tienda)"
+        elif es_internacional:
+            # Tienda europea enviando a España (ej. Amazon Alemania, Amazon Francia, etc.)
+            coste_envio = float(envio_europa_estimado)
+            origen_envio = f"{coste_envio:.2f} € (Estimado envío internacional a España)"
         elif envio_por_defecto is not None:
             coste_envio = float(envio_por_defecto)
+            origen_envio = f"{coste_envio:.2f} € (Estimado nacional)"
+        else:
+            coste_envio = 0.0
+            origen_envio = "Desconocido"
 
-    # El envío de la tienda se abona una sola vez por pedido
+    # El envío se paga una sola vez por el pedido completo
     total_pedido = (precio * cantidad) + coste_envio
     total_unidad = total_pedido / cantidad
 
@@ -283,7 +370,9 @@ def calcular_costes(producto, precio, envio, config):
         "precio_base": precio,
         "envio": envio,
         "envio_conocido": envio_conocido,
+        "es_internacional": es_internacional,
         "coste_envio_aplicado": coste_envio,
+        "origen_envio": origen_envio,
         "cantidad": cantidad,
         "total_unidad": total_unidad,
         "total_pedido": total_pedido,
@@ -322,13 +411,13 @@ def evaluar_oferta(producto, costes, precio_medida, config):
     Si se exige que el envío esté confirmado y no se conoce, se descarta.
     """
     incluir_envio = config.get("incluir_envio", True)
-    exigir_confirmado = config.get("exigir_envio_confirmado", True)
+    exigir_confirmado = config.get("exigir_envio_confirmado", False)
 
-    # Si se exige incluir envío y que esté confirmado, y no se conoce:
-    if incluir_envio and exigir_confirmado and not costes["envio_conocido"] and config.get("envio_por_defecto") is None:
+    # Si se exige estrictamente que el envío esté confirmado en el texto
+    if incluir_envio and exigir_confirmado and not costes["envio_conocido"]:
         return {
             "cumple": False,
-            "motivo_descarte": "Gastos de envío desconocidos en el resultado (se exige envío confirmado)",
+            "motivo_descarte": "Gastos de envío no confirmados en el texto (se exige confirmación explícita)",
             "precio_medida": precio_medida,
             **costes,
         }
@@ -385,13 +474,10 @@ def guardar_historico(producto, oferta, evaluacion):
             "fecha": datetime.now(timezone.utc).isoformat(),
             "producto_id": producto["id"],
             "producto": producto["nombre"],
-            "tienda": oferta["tienda"],
+            "tienda": oferta["tienda_nombre"],
+            "pais": oferta["pais"],
             "precio_producto": f"{oferta['precio']:.2f}",
-            "envio": (
-                f"{evaluacion['envio']:.2f}"
-                if evaluacion["envio_conocido"]
-                else "Desconocido"
-            ),
+            "envio": evaluacion["origen_envio"],
             "envio_confirmado": "SI" if evaluacion["envio_conocido"] else "NO",
             "total_unidad_con_envio": f"{evaluacion['total_unidad']:.2f}",
             "cantidad": evaluacion["cantidad"],
@@ -443,24 +529,15 @@ def enviar_telegram(mensaje):
 def crear_mensaje(producto, oferta, evaluacion, bajada=False):
     moneda = "€"
     titulo = "📉 BAJADA DE PRECIO" if bajada else "🛒 NUEVA OFERTA"
-
-    if evaluacion["envio_conocido"]:
-        if evaluacion["envio"] == 0.0:
-            envio_texto = "GRATIS (0.00 €)"
-        else:
-            envio_texto = f"{evaluacion['envio']:.2f} {moneda}"
-    else:
-        if evaluacion["coste_envio_aplicado"] > 0:
-            envio_texto = f"{evaluacion['coste_envio_aplicado']:.2f} {moneda} (Estimado)"
-        else:
-            envio_texto = "Desconocido (no indicado en web)"
+    tienda = oferta.get("tienda_nombre", oferta["tienda"])
+    pais = oferta.get("pais", "🇪🇺 Europa")
 
     mensaje = (
         f"{titulo}\n\n"
         f"📦 {producto['nombre']}\n"
-        f"🏪 Tienda: {oferta['tienda']}\n\n"
+        f"🏪 Tienda: {tienda} ({pais})\n\n"
         f"💶 Precio producto: {oferta['precio']:.2f} {moneda}\n"
-        f"🚚 Gastos de envío: {envio_texto}\n"
+        f"🚚 Gastos de envío a España: {evaluacion['origen_envio']}\n"
         f"💰 Total unidad (con envío): {evaluacion['total_unidad']:.2f} {moneda}\n"
         f"🔢 Cantidad pedido: {evaluacion['cantidad']}\n"
         f"🧾 Total pedido (con envío): {evaluacion['total_pedido']:.2f} {moneda}\n"
@@ -472,8 +549,10 @@ def crear_mensaje(producto, oferta, evaluacion, bajada=False):
             f"📊 Coste por {unidad}: {evaluacion['precio_medida']:.2f} {moneda}/{unidad}\n"
         )
 
-    if not evaluacion["envio_conocido"]:
-        mensaje += "\n⚠️ Gastos de envío no confirmados en la web. Comprueba antes de comprar.\n"
+    if evaluacion["es_internacional"]:
+        mensaje += "\nℹ️ Tienda europea con envío a España. Verifica el importe final en el carrito.\n"
+    elif not evaluacion["envio_conocido"]:
+        mensaje += "\n⚠️ Gastos de envío estimados. Verifica antes de comprar.\n"
 
     mensaje += f"\n🔗 ENLACE A LA OFERTA:\n{oferta['url']}"
     return mensaje
@@ -489,7 +568,13 @@ def clave_oferta(producto, oferta):
 
 
 def procesar_oferta(producto, oferta, config, estado):
-    costes = calcular_costes(producto, oferta["precio"], oferta["envio"], config)
+    costes = calcular_costes(
+        producto,
+        oferta["precio"],
+        oferta["envio"],
+        config,
+        es_internacional=oferta["es_internacional"]
+    )
     precio_medida = calcular_precio_medida(producto, costes["total_unidad"])
     evaluacion = evaluar_oferta(producto, costes, precio_medida, config)
 
@@ -520,7 +605,7 @@ def procesar_oferta(producto, oferta, config, estado):
             avisar = True
 
     if avisar:
-        print(f"  🔔 ¡Oferta cumple criterios! Enviando a Telegram: {evaluacion['total_unidad']:.2f} €/unidad...")
+        print(f"  🔔 ¡Oferta cumple criterios! Enviando a Telegram: {evaluacion['total_unidad']:.2f} €/unidad ({oferta['tienda_nombre']})...")
         mensaje = crear_mensaje(producto, oferta, evaluacion, es_bajada)
         if enviar_telegram(mensaje):
             print("  ✅ Notificación de Telegram enviada con éxito.")
@@ -532,7 +617,7 @@ def procesar_oferta(producto, oferta, config, estado):
             print("  ❌ No se pudo enviar la notificación a Telegram.")
     else:
         if evaluacion.get("motivo_descarte"):
-            print(f"  ℹ️ {oferta['tienda']} ({oferta['precio']:.2f} €): {evaluacion['motivo_descarte']}")
+            print(f"  ℹ️ [{oferta['pais']}] {oferta['tienda_nombre']} ({oferta['precio']:.2f} €): {evaluacion['motivo_descarte']}")
         if anterior is None:
             ofertas_guardadas[clave] = {
                 "precio": precio_actual,
@@ -543,52 +628,189 @@ def procesar_oferta(producto, oferta, config, estado):
 
 
 # ============================================================
-# BUSQUEDA MEDIANTE DDGS
+# GENERACION DE CONSULTAS Y BUSQUEDA RESILIENTE (EUROPA)
 # ============================================================
 
-def buscar_producto(producto, pais, config):
-    consulta = f"{producto['busqueda']} comprar precio {pais}"
+def generar_consultas(producto, config):
+    """
+    Genera consultas estratégicas para España y tiendas europeas (Amazon DE, FR, IT, Geizhals, etc.)
+    que envían a España.
+    """
+    busqueda = producto.get("busqueda", "").strip()
+    buscar_europa = config.get("buscar_en_europa", True)
+    consultas = []
+
+    tokens = busqueda.split()
+    modelos = [
+        t for t in tokens
+        if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 5
+    ]
+
+    if modelos:
+        modelo = modelos[0]
+        # 1. Búsqueda directa en Amazon España
+        consultas.append((f'"{modelo}" amazon', "es-es"))
+        consultas.append((f'"{modelo}" pccomponentes', "es-es"))
+        consultas.append((f'"{modelo}" precio', "es-es"))
+
+        if buscar_europa:
+            # 2. Amazon Europa (Alemania, Francia, Italia envían a España)
+            consultas.append((f'"{modelo}" amazon.de', "de-de"))
+            consultas.append((f'"{modelo}" amazon.fr', "fr-fr"))
+            consultas.append((f'"{modelo}" amazon.it', "it-it"))
+
+            # 3. Comparadores europeos líderes con envíos a España
+            consultas.append((f'"{modelo}" geizhals', "de-de"))
+            consultas.append((f'"{modelo}" idealo', "wt-wt"))
+            consultas.append((f'"{modelo}" shipping Spain', "wt-wt"))
+
+        # 4. Búsqueda exacta limpia
+        consultas.append((f'"{modelo}"', "wt-wt"))
+
+    else:
+        consultas.append((f"{busqueda} precio", "es-es"))
+        consultas.append((f"{busqueda} amazon", "es-es"))
+        if buscar_europa:
+            consultas.append((f"{busqueda} amazon.de", "de-de"))
+            consultas.append((f"{busqueda} geizhals", "de-de"))
+        consultas.append((busqueda, "wt-wt"))
+
+    # Deduplicar manteniendo orden
+    vistos = set()
+    unicas = []
+    for c, reg in consultas:
+        if c not in vistos:
+            vistos.add(c)
+            unicas.append((c, reg))
+
+    return unicas
+
+
+def buscar_en_ddgs(buscador, consulta, region):
+    """
+    Ejecuta la búsqueda probando backends (auto -> lite -> html)
+    para evitar bloqueos de IP en GitHub Actions o servidores cloud.
+    """
+    for backend in ["auto", "lite", "html"]:
+        try:
+            res = buscador.text(
+                consulta,
+                region=region,
+                backend=backend,
+                max_results=15
+            )
+            if res:
+                lista = list(res)
+                if lista:
+                    return lista
+        except Exception:
+            continue
+    return []
+
+
+def consultar_url_directa(url, producto, config):
+    """
+    Si el producto tiene una URL fija configurada (ej. enlace directo de Amazon),
+    extrae el precio directamente.
+    """
+    try:
+        respuesta = requests.get(url, headers=HEADERS_HTTP, timeout=15)
+        if respuesta.status_code != 200:
+            return None
+
+        texto = respuesta.text
+        precio = extraer_precio(texto)
+        if not precio:
+            return None
+
+        tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
+        envio = extraer_envio(texto)
+
+        # En Amazon España pedidos > 35€ tienen envío gratis
+        if envio is None and "Amazon España" in tienda_nombre and precio >= 35.0:
+            envio = 0.0
+
+        return {
+            "producto_id": producto["id"],
+            "producto": producto["nombre"],
+            "tienda": urlparse(url).netloc.lower().removeprefix("www."),
+            "tienda_nombre": tienda_nombre,
+            "pais": pais,
+            "es_internacional": es_inter,
+            "precio": precio,
+            "envio": envio,
+            "url": url,
+            "titulo": producto["nombre"],
+        }
+    except Exception:
+        return None
+
+
+def buscar_producto(producto, pais_default, config):
+    consultas = generar_consultas(producto, config)
     resultados = []
     vistos = set()
 
+    # Si hay una URL directa configurada en el producto, consultarla primero
+    urls_fijas = []
+    if producto.get("url"):
+        urls_fijas.append(producto["url"])
+    if producto.get("urls") and isinstance(producto["urls"], list):
+        urls_fijas.extend(producto["urls"])
+
+    for u in urls_fijas:
+        directa = consultar_url_directa(u, producto, config)
+        if directa:
+            vistos.add(directa["url"])
+            resultados.append(directa)
+
     try:
         with DDGS() as buscador:
-            encontrados = buscador.text(consulta, max_results=25)
+            for consulta, region in consultas:
+                encontrados = buscar_en_ddgs(buscador, consulta, region)
+                for res in encontrados:
+                    url = res.get("href", "")
+                    if not url.startswith(("http://", "https://")) or url in vistos:
+                        continue
 
-            for resultado in encontrados:
-                titulo = resultado.get("title", "")
-                descripcion = resultado.get("body", "")
-                url = resultado.get("href", "")
+                    titulo = res.get("title", "")
+                    descripcion = res.get("body", "")
+                    texto = f"{titulo} {descripcion}"
 
-                if not url.startswith(("http://", "https://")):
-                    continue
+                    precio = extraer_precio(texto)
+                    if precio is None:
+                        continue
 
-                if url in vistos:
-                    continue
-                vistos.add(url)
+                    if not es_resultado_valido(producto, titulo, descripcion, precio, config, url):
+                        continue
 
-                texto = f"{titulo} {descripcion}"
-                precio = extraer_precio(texto)
-                if precio is None:
-                    continue
+                    vistos.add(url)
+                    tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
+                    domain = urlparse(url).netloc.lower().removeprefix("www.")
+                    envio = extraer_envio(texto)
 
-                if not es_resultado_valido(producto, titulo, descripcion, precio, config):
-                    continue
+                    # En Amazon España, pedidos superiores a 35€ tienen envío gratis
+                    if envio is None and "amazon.es" in domain and precio >= 35.0:
+                        envio = 0.0
 
-                envio = extraer_envio(texto)
+                    resultados.append({
+                        "producto_id": producto["id"],
+                        "producto": producto["nombre"],
+                        "tienda": domain,
+                        "tienda_nombre": tienda_nombre,
+                        "pais": pais,
+                        "es_internacional": es_inter,
+                        "precio": precio,
+                        "envio": envio,
+                        "url": url,
+                        "titulo": titulo,
+                    })
 
-                resultados.append({
-                    "producto_id": producto["id"],
-                    "producto": producto["nombre"],
-                    "tienda": obtener_tienda(url),
-                    "precio": precio,
-                    "envio": envio,
-                    "url": url,
-                    "titulo": titulo,
-                })
+                # Pausa breve entre consultas para respetar rate limits
+                time.sleep(1.0)
 
     except Exception as error:
-        print(f"Error buscando '{producto['nombre']}': {error}")
+        print(f"Error general en buscador para '{producto['nombre']}': {error}")
 
     return resultados
 
@@ -599,7 +821,7 @@ def buscar_producto(producto, pais, config):
 
 def main():
     print("=" * 60)
-    print("MONITOR UNIVERSAL DE PRECIOS")
+    print("MONITOR UNIVERSAL DE PRECIOS (ESPAÑA Y EUROPA)")
     print("=" * 60)
 
     config = cargar_configuracion()
@@ -626,17 +848,20 @@ def main():
         print("No hay productos activos configurados.")
         return
 
+    buscar_eu = config.get("buscar_en_europa", True)
+    modo_busqueda = "España + Europa con envío a España" if buscar_eu else "Solo España"
+    print(f"Ámbito de rastreo: {modo_busqueda}")
     print(f"Productos activos a monitorizar: {len(productos_activos)}")
 
     for producto in productos_activos:
-        print(f"\n🔎 Buscando: {producto['nombre']} ({producto.get('busqueda')})")
+        print(f"\n🔎 Buscando: {producto['nombre']} (Modelo: {producto.get('busqueda')})")
         ofertas = buscar_producto(producto, config.get("pais", "España"), config)
         print(f"   Resultados válidos encontrados: {len(ofertas)}")
 
         for oferta in ofertas:
             procesar_oferta(producto, oferta, config, estado)
 
-        time.sleep(2)
+        time.sleep(1.5)
 
     estado["ultima_busqueda"] = time.time()
     guardar_estado(estado)

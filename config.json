@@ -3,9 +3,10 @@
   "pais": "España",
   "moneda": "EUR",
   "incluir_envio": true,
+  "exigir_envio_confirmado": true,
+  "envio_por_defecto": null,
   "notificar_bajadas": true,
   "solo_nuevas_ofertas": true,
-
   "productos": [
     {
       "id": "wd-red-8tb",
@@ -14,6 +15,17 @@
       "precio_maximo_unidad": 160,
       "precio_maximo_pedido": 310,
       "precio_maximo_por_unidad_medida": 40,
+      "unidad_medida": "TB",
+      "cantidad": 2,
+      "activo": true
+    },
+    {
+      "id": "wd-red-6tb",
+      "nombre": "WD Red Plus 6TB",
+      "busqueda": "WD60EFPX disco duro NAS 6TB",
+      "precio_maximo_unidad": 287,
+      "precio_maximo_pedido": 575,
+      "precio_maximo_por_unidad_medida": 48,
       "unidad_medida": "TB",
       "cantidad": 2,
       "activo": true

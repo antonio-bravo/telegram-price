@@ -2,10 +2,10 @@ name: Monitor universal de precios
 
 on:
   schedule:
-    # Comprobar cada 5 minutos
-    - cron: "*/5 * * * *"
+    # Comprobar cada hora (al minuto 17)
+    - cron: "17 * * * *"
 
-  # Permitir ejecución manual
+  # Permitir ejecución manual desde la pestaña Actions de GitHub
   workflow_dispatch:
 
 permissions:
@@ -22,13 +22,13 @@ jobs:
     steps:
       # 1. Descargar repositorio
       - name: Descargar repositorio
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       # 2. Configurar Python
       - name: Configurar Python
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@v5
         with:
-          python-version: "3.15"
+          python-version: "3.12"
           cache: "pip"
 
       # 3. Instalar dependencias
@@ -53,6 +53,8 @@ jobs:
 
           git add historico.csv monitor_state.json
 
-          git diff --cached --quiet || git commit -m "Actualizar histórico de precios"
-
-          git push
+          if ! git diff --cached --quiet; then
+            git commit -m "Actualizar histórico de precios [skip ci]"
+            git pull --rebase origin main
+            git push
+          fi

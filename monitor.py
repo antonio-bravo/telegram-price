@@ -79,9 +79,9 @@ def get_robust_session():
     session = requests.Session()
     # Configuración de reintentos: 3 intentos, esperando 2s, 4s, 8s (backoff exponencial)
     retry_strategy = urllib3.util.Retry(
-        total=3,
+        total=2,
         backoff_factor=2,
-        status_forcelist=[429, 500, 502, 503, 504],
+        status_forcelist=[429, 500, 502, 504], #503,
         allowed_methods=["HEAD", "GET", "OPTIONS"]
     )
     adapter = HTTPAdapter(max_retries=retry_strategy)
@@ -821,42 +821,7 @@ def buscar_producto(producto, pais_default, config):
     resultados = []
     vistos = set()
 
-    # ============================================================
-    # ATAJO: BÚSQUEDA DIRECTA EN AMAZON (By-passea a DuckDuckGo)
-    # ============================================================
-    modelo_busqueda = producto.get("busqueda", "").strip()
-    if modelo_busqueda and config.get("solo_union_europea", True):
-        import urllib.parse
-        query_encoded = urllib.parse.quote(modelo_busqueda)
-        amazon_search_url = f"https://www.amazon.es/s?k={query_encoded}&i=electronics"
-        
-        print(f"   🔎 Buscando modelo exacto directamente en Amazon.es...")
-        try:
-            session = get_robust_session()
-            headers = BASE_HEADERS.copy()
-            headers["User-Agent"] = random.choice(USER_AGENTS)
-            
-            # Visitamos la página de resultados de Amazon
-            resp = session.get(amazon_search_url, headers=headers, timeout=15.0)
-            
-            # Buscamos el primer enlace de producto real (patrón /dp/ASIN)
-            primer_producto = re.search(r'(https://www\.amazon\.es/.*?/dp/([A-Z0-9]{10}))', resp.text)
-            
-            if primer_producto:
-                url_producto_real = primer_producto.group(1).split("?")[0] # Limpiamos parámetros
-                if url_producto_real not in vistos:
-                    print(f"   🔗 Producto encontrado, visitando URL real: {url_producto_real}")
-                    directa_amazon = consultar_url_directa(url_producto_real, producto, config)
-                    if directa_amazon:
-                        vistos.add(directa_amazon["url"])
-                        resultados.append(directa_amazon)
-            else:
-                print("   ⚠️ No se encontraron productos directos en Amazon.es para este modelo.")
-        except Exception as e:
-            print(f"   ⚠️ Error en búsqueda directa Amazon: {e}")
-    # ============================================================
-
-    # URLs fijas configuradas en el JSON
+    # 1. URLs fijas configuradas en el JSON
     urls_fijas = []
     if producto.get("url"):
         urls_fijas.append(producto["url"])
@@ -870,7 +835,7 @@ def buscar_producto(producto, pais_default, config):
             resultados.append(directa)
         time.sleep(random.uniform(1.0, 2.5))
 
-    # Búsqueda con DuckDuckGo (para PcComponentes, Wallapop, Vinted, etc.)
+    # 2. Búsqueda con DuckDuckGo (para PcComponentes, Wallapop, Vinted, Idealo, etc.)
     try:
         with DDGS() as buscador:
             for consulta, region in consultas:
@@ -880,21 +845,26 @@ def buscar_producto(producto, pais_default, config):
                     if not url.startswith(("http://", "https://")) or url in vistos:
                         continue
 
+                    # 🛡️ CORRECCIÓN CLAVE: Ignorar páginas de búsqueda de Amazon (/s?).
+                    # Estas páginas devuelven 503 desde GitHub Actions. 
+                    # Solo permitimos pasar a páginas de producto reales (que contienen /dp/)
+                    if "amazon." in url.lower() and "/s?" in url.lower():
+                        continue
+
                     titulo = res.get("title", "")
                     descripcion = res.get("body", "")
                     texto = f"{titulo} {descripcion}"
 
-                    # 1. Intentamos extraer precio del resumen de DuckDuckGo
+                    # A. Intentamos extraer precio del resumen de DuckDuckGo
                     precio = extraer_precio(texto)
 
-                    # 2. LÓGICA DE RESPALDO: Si no hay precio, pero es tienda fiable, visitamos
+                    # B. LÓGICA DE RESPALDO: Si no hay precio, pero es tienda fiable, visitamos la URL
                     if precio is None:
                         tiendas_fiables = [
-                            "amazon.de", "amazon.fr", "amazon.it", "amazon.nl",
+                            "amazon.es", "amazon.de", "amazon.fr", "amazon.it", "amazon.nl",
                             "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
                             "geizhals", "idealo", "wallapop", "vinted"
                         ]
-                        # Nota: amazon.es ya lo manejamos arriba, pero lo dejamos por si acaso
                         es_tienda_fiable = any(tienda in url.lower() for tienda in tiendas_fiables)
                         
                         termino_busqueda = producto.get("busqueda", "").lower()
@@ -910,7 +880,7 @@ def buscar_producto(producto, pais_default, config):
                         
                         continue # Pasamos al siguiente resultado de DDG
 
-                    # 3. Si SÍ había precio en el resumen, seguimos con el flujo normal
+                    # C. Si SÍ había precio en el resumen, seguimos con el flujo normal de validación
                     if not es_resultado_valido(producto, titulo, descripcion, precio, config, url):
                         continue
 
@@ -935,6 +905,7 @@ def buscar_producto(producto, pais_default, config):
                         "titulo": titulo,
                     })
                 
+                # Pausa humana entre cada consulta de búsqueda
                 time.sleep(random.uniform(2.5, 5.0))
                 
     except Exception as error:

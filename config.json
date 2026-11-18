@@ -1,10 +1,9 @@
 {
-  "intervalo_minutos": 60,
   "pais": "España",
   "moneda": "EUR",
-  "buscar_en_europa": true,
   "solo_union_europea": true,
   "incluir_wallapop_vinted": true,
+  "ignorar_vendidos": true,
   "envio_wallapop_vinted_estimado": 4.50,
   "envio_europa_estimado": 6.50,
   "incluir_envio": true,

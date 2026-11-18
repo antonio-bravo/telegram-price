@@ -1,9 +1,14 @@
-name: Monitor universal de precios
+name: check precios
 
 on:
   schedule:
     - cron: "17 * * * *"
-
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main  
   workflow_dispatch:
 
 permissions:

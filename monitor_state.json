@@ -1,4 +1,93 @@
 {
-  "ultima_busqueda": 1795006835.211794,
-  "ofertas": {}
+  "ultima_busqueda": 1795009996.053185,
+  "ofertas": {
+    "2fad22fc09e4119794017aba6f71bb573b0db60d54bece65362b25b6f28b0252": {
+      "precio": 369.06,
+      "ultima_alerta": null
+    },
+    "286439a63a463d887fbee3ecd4f57570ef493a7d8ba5aa987822e5b68cdb3538": {
+      "precio": 368.15,
+      "ultima_alerta": null
+    },
+    "d8d336d0f179e9e5807f27232f3bb4bde09a1fc6e86fd77bed5d128bec065557": {
+      "precio": 368.15,
+      "ultima_alerta": null
+    },
+    "ccb93c35b1f3eb771b748ac22074fa740c19100e4ec6fad1a34124e58b2f546e": {
+      "precio": 372.15,
+      "ultima_alerta": null
+    },
+    "eec29a96ecd8c3f361144d4269c8a8a152658c9241f4a504632aa32b69209f7f": {
+      "precio": 372.15,
+      "ultima_alerta": null
+    },
+    "77aee1dd06465adacfec9c740952141814d761be4d27b35b048c0b40a18ad7f2": {
+      "precio": 372.24,
+      "ultima_alerta": null
+    },
+    "c9465661e648c68b24a0f7568b12a268d3308242ccb4ccab5d84ecadabe1a52d": {
+      "precio": 373.24,
+      "ultima_alerta": null
+    },
+    "34918b97e82e1133c8d96a26f7f5c85784599144192550a306a8e66027cb0e93": {
+      "precio": 377.82,
+      "ultima_alerta": null
+    },
+    "cbf8191be09fd2bea3fea7d6e4f8d62ccef90eb8d55233037cb4d22cb55bdcea": {
+      "precio": 376.24,
+      "ultima_alerta": null
+    },
+    "0b7e5b1fede798640082961c0d52dbbfc9cb61c3edb57168a2da4f87e172080e": {
+      "precio": 376.24,
+      "ultima_alerta": null
+    },
+    "0c4f8fa3cd8d44abb1e05956f8f131f3eb2639e5ed7dbd60373c039b4bcc9223": {
+      "precio": 292.25,
+      "ultima_alerta": null
+    },
+    "b8260e59c5ed43a2ea52ab7c592ee6ee5479c8c32de5fddc4b4e3f8097782620": {
+      "precio": 334.25,
+      "ultima_alerta": null
+    },
+    "9716a9ad62e120521c57ee8afbc8b3008316364d827390e3c4177b37145f93de": {
+      "precio": 334.25,
+      "ultima_alerta": null
+    },
+    "57a231eb425bfc80742562832d21d0f8fc05022bb898c8210587b141d69978b4": {
+      "precio": 292.25,
+      "ultima_alerta": null
+    },
+    "6aaddb95bdb574344489b109b3e0daa41c9eba8a1713d1fc1771ad06e67ecb2e": {
+      "precio": 302.24,
+      "ultima_alerta": null
+    },
+    "aa819d218df835736e80c9b3e4d9fcba0f0d528633d9ced6cbb0081f8fac3fd1": {
+      "precio": 302.24,
+      "ultima_alerta": null
+    },
+    "748e361c733da8f4272f42433cbd0db1dacf04ca5d52a7fb38f70075da52d032": {
+      "precio": 302.23,
+      "ultima_alerta": null
+    },
+    "9646944db7a3a8e844f3fe7a9a49a7eec627051f2546d0b5f0ab10fb4b535dc0": {
+      "precio": 292.25,
+      "ultima_alerta": null
+    },
+    "4ac0c1bcc4a76ba4d0f218b71c5c33a2cf0947dcdaaf2178c68dc3e597eac693": {
+      "precio": 317.85,
+      "ultima_alerta": null
+    },
+    "3324c7b720cd40caae07ec7fcbc073ec281faffb2f5d5973b13b62578595346c": {
+      "precio": 317.85,
+      "ultima_alerta": null
+    },
+    "b75cd3e5003e38057639b24a7e037b19b3c19b76137efc9dde338ddf2e6fc0ec": {
+      "precio": 292.25,
+      "ultima_alerta": null
+    },
+    "8ffb75abd539d1c5be5c19d67035cca802821d34e4d43ba25deb4d61bc61980c": {
+      "precio": 342.15,
+      "ultima_alerta": null
+    }
+  }
 }

@@ -6,7 +6,7 @@ Monitor automático de precios configurable mediante `config.json` para rastrear
 
 ## 🚀 Características principales
 
-* **Rastreo en España y Europa:** Consulta automáticamente las principales tiendas y comparadores europeos con envío a España (Amazon ES, DE, FR, IT, Geizhals, Idealo, etc.).
+* **Rastreo en España y la Unión Europea (Sin aduanas):** Consulta automáticamente tiendas del mercado único de la UE (Amazon España, Alemania, Francia, Italia, Países Bajos, Geizhals, Idealo UE, PcComponentes, etc.). **Excluye Reino Unido (UK)**, EE.UU., Suiza y terceros países para evitar aranceles, DUA y costes de importación.
 * **Gastos de envío a España incluidos:** 
   * Detecta envíos gratis en España e internacionales.
   * Si compras en una tienda europea (ej. Amazon Alemania), aplica el coste estimado de envío internacional a España (por defecto 6.50 €) si no viene desglosado en el texto, evitando que te sorprendan portes caros al pagar.
@@ -30,6 +30,7 @@ El comportamiento del monitor se controla desde `config.json`:
   "pais": "España",
   "moneda": "EUR",
   "buscar_en_europa": true,
+  "solo_union_europea": true,
   "envio_europa_estimado": 6.50,
   "incluir_envio": true,
   "exigir_envio_confirmado": false,
@@ -86,14 +87,37 @@ El comportamiento del monitor se controla desde `config.json`:
 
 ## 🤖 Configuración del Bot de Telegram
 
-1. Crea un bot con [@BotFather](https://t.me/botfather) en Telegram y obtén tu **Bot Token**.
-2. Obtén tu **Chat ID** (por ejemplo mediante [@userinfobot](https://t.me/userinfobot)).
-3. **MUY IMPORTANTE:** Abre el chat con tu bot recién creado en Telegram y pulsa el botón **/start** (o envíale un primer mensaje). Si no haces esto, Telegram no permitirá que el bot te envíe mensajes (`403 Forbidden`).
-4. En tu repositorio de GitHub, dirígete a:
-   `Settings > Secrets and variables > Actions > New repository secret`
-5. Añade dos secretos:
-   * `TELEGRAM_BOT_TOKEN`: El token de BotFather.
-   * `TELEGRAM_CHAT_ID`: Tu ID de chat numérico.
+### 1. Crear el bot
+1. Abre Telegram, busca [@BotFather](https://t.me/botfather) y pulsa **/start**.
+2. Envía el comando `/newbot` y sigue los pasos para asignarle un nombre y un usuario.
+3. Al finalizar, BotFather te entregará el **Bot Token** (guárdalo).
+
+### 2. Obtener el Chat ID o Group ID
+Puedes recibir las alertas por mensaje privado o en un grupo:
+
+* **Opción A: En un grupo de Telegram (Recomendado)**
+  1. Crea un nuevo grupo en Telegram y añade a tu bot recién creado.
+  2. Añade también al bot [@getidsbot](https://t.me/getidsbot) dentro del grupo.
+  3. En cuanto entre, `@getidsbot` enviará un mensaje mostrando la información del grupo, incluyendo el **`groupId`** (suele ser un número negativo que empieza por un guion, ej: `-100xxxxxxxxxx`).
+  4. Copia ese ID (incluyendo el guion `-`) y elimina a `@getidsbot` del grupo.
+
+* **Opción B: En un chat privado con el bot**
+  1. Abre una conversación privada con tu bot y pulsa **/start** (o envíale cualquier mensaje).
+  2. Habla con [@userinfobot](https://t.me/userinfobot) o reenvíale un mensaje a [@getidsbot](https://t.me/getidsbot) para obtener tu `Id` numérico personal.
+
+> [!IMPORTANT]
+> **Imprescindible:** Si usas un chat privado, debes haberle enviado al menos un mensaje al bot (o pulsado `/start`). Si usas un grupo, el bot debe ser miembro del grupo. De lo contrario, Telegram rechazará el envío con un error `403 Forbidden`.
+
+### 3. Configurar en GitHub
+1. En tu repositorio de GitHub, dirígete a:
+   `Settings > Secrets and variables > Actions`
+2. Configura las siguientes credenciales:
+   * **En Secrets (`New repository secret`):**
+     * Nombre: `TELEGRAM_BOT_TOKEN` (o `BOT_TOKEN`)
+     * Valor: El token que te dio BotFather.
+   * **En Variables (`New repository variable`) o en Secrets:**
+     * Nombre: `TELEGRAM_CHAT_ID` (o `CHAT_ID`)
+     * Valor: El `groupId` (o chat id numérico) obtenido con `@getidsbot`.
 
 ---
 

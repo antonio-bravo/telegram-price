@@ -68,6 +68,7 @@ def cargar_configuracion():
     config.setdefault("pais", "España")
     config.setdefault("moneda", "EUR")
     config.setdefault("buscar_en_europa", True)
+    config.setdefault("solo_union_europea", True)
     config.setdefault("envio_europa_estimado", 6.50)
     config.setdefault("incluir_envio", True)
     config.setdefault("exigir_envio_confirmado", False)
@@ -225,13 +226,59 @@ def extraer_capacidad(texto, unidad):
         return None
 
 
-def detectar_tienda_y_pais(url):
+# ============================================================
+# PAISES Y TIENDAS DE LA UNION EUROPEA
+# ============================================================
+
+PAISES_UE_TLD = {
+    "es", "de", "fr", "it", "pt", "nl", "be", "at",
+    "pl", "se", "dk", "ie", "fi", "cz", "gr", "eu"
+}
+
+DOMINIOS_FUERA_UE = (
+    ".co.uk", ".uk", ".ch", ".us", ".ca", ".au", ".cn", ".jp", ".ru",
+    "amazon.com", "amazon.co.uk", "amazon.ca", "amazon.com.au",
+    "ebay.com", "ebay.co.uk", "idealo.co.uk", "scan.co.uk",
+    "ebuyer.com", "overclockers.co.uk", "box.co.uk"
+)
+
+
+def es_tienda_ue(url):
     """
-    Identifica la tienda y el país a partir de la URL, marcando si es internacional.
+    Verifica que la tienda pertenezca a la Unión Europea (mercado común sin aduanas).
+    Descarta Reino Unido (UK), EE.UU., Canadá, Suiza, etc. para evitar aranceles e IVA de importación.
     """
     domain = urlparse(url).netloc.lower().removeprefix("www.")
 
-    # Amazon en Europa
+    # 1. Descarte explícito de países fuera de la Unión Europea
+    if domain.endswith(DOMINIOS_FUERA_UE) or any(d in domain for d in DOMINIOS_FUERA_UE):
+        return False
+
+    # 2. Comprobar terminación TLD perteneciente a la UE
+    partes = domain.split(".")
+    tld = partes[-1] if partes else ""
+    if tld in PAISES_UE_TLD:
+        return True
+
+    # 3. Tiendas específicas verificadas dentro de la UE
+    tiendas_ue_conocidas = [
+        "amazon.es", "amazon.de", "amazon.fr", "amazon.it", "amazon.nl", "amazon.com.be",
+        "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
+        "geizhals", "alternate", "caseking", "mindfactory", "ldlc", "mediamarkt"
+    ]
+    if any(t in domain for t in tiendas_ue_conocidas):
+        return True
+
+    return False
+
+
+def detectar_tienda_y_pais(url):
+    """
+    Identifica la tienda y el país a partir de la URL, marcando si es internacional dentro de la UE.
+    """
+    domain = urlparse(url).netloc.lower().removeprefix("www.")
+
+    # Tiendas Amazon en la Unión Europea
     if "amazon.es" in domain:
         return "Amazon España", "🇪🇸 España", False
     if "amazon.de" in domain:
@@ -245,19 +292,25 @@ def detectar_tienda_y_pais(url):
     if "amazon.com.be" in domain or "amazon.be" in domain:
         return "Amazon Bélgica", "🇧🇪 Bélgica", True
 
+    # Reino Unido (identificación para descarte o información)
+    if domain.endswith((".co.uk", ".uk")) or "amazon.co.uk" in domain:
+        return domain, "🇬🇧 Reino Unido (Fuera UE)", True
+
     # Tiendas destacadas en España
     if domain.endswith(".es") or any(t in domain for t in ["pccomponentes", "coolmod", "neobyte", "aussar", "senetic"]):
         return domain, "🇪🇸 España", False
 
     # Comparadores y distribuidores europeos
     if "geizhals" in domain:
-        return "Geizhals (Europa)", "🇪🇺 Europa", True
+        return "Geizhals (Europa)", "🇪🇺 Europa (UE)", True
     if "idealo" in domain:
         if domain.endswith(".de"):
             return "Idealo Alemania", "🇩🇪 Alemania", True
         if domain.endswith(".fr"):
             return "Idealo Francia", "🇫🇷 Francia", True
-        return "Idealo", "🇪🇺 Europa", True
+        if domain.endswith(".it"):
+            return "Idealo Italia", "🇮🇹 Italia", True
+        return "Idealo", "🇪🇺 Europa (UE)", True
     if "alternate" in domain:
         if domain.endswith(".de"):
             return "Alternate Alemania", "🇩🇪 Alemania", True
@@ -267,7 +320,7 @@ def detectar_tienda_y_pais(url):
     if "ldlc" in domain:
         return "LDLC", "🇫🇷 Francia", True
 
-    # Por extensión de dominio
+    # Por extensión de dominio dentro de la UE
     if domain.endswith(".de"):
         return domain, "🇩🇪 Alemania", True
     if domain.endswith(".fr"):
@@ -276,8 +329,12 @@ def detectar_tienda_y_pais(url):
         return domain, "🇮🇹 Italia", True
     if domain.endswith(".nl"):
         return domain, "🇳🇱 Países Bajos", True
+    if domain.endswith(".at"):
+        return domain, "🇦🇹 Austria", True
+    if domain.endswith(".pt"):
+        return domain, "🇵🇹 Portugal", True
 
-    return domain, "🇪🇺 Europa", True
+    return domain, "🇪🇺 Europa (UE)", True
 
 
 # ============================================================
@@ -286,12 +343,20 @@ def detectar_tienda_y_pais(url):
 
 def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
     """
-    Evita falsos positivos descartando accesorios, reacondicionados
-    o resultados que no coincidan con el producto buscado.
+    Evita falsos positivos descartando accesorios, reacondicionados,
+    y tiendas fuera de la Unión Europea (UK, USA, Suiza, etc.).
     """
     texto = f"{titulo} {descripcion} {url}".lower()
 
-    # 1. Comprobar exclusiones (reacondicionados, cables, carcasas, etc.)
+    # 1. Comprobar que pertenezca a la Unión Europea (sin aduanas a España)
+    if config.get("solo_union_europea", True):
+        if not es_tienda_ue(url):
+            return False
+        # Descartar si el texto contiene precios en libras (£ / GBP) o dólares ($ / USD)
+        if "£" in texto or "gbp" in texto or "$" in texto or "usd" in texto:
+            return False
+
+    # 2. Comprobar exclusiones (reacondicionados, cables, carcasas, etc.)
     exclusiones = (
         producto.get("excluir_terminos")
         if producto.get("excluir_terminos") is not None
@@ -301,7 +366,7 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
         if termino.lower() in texto:
             return False
 
-    # 2. Comprobar que contenga el modelo o términos clave obligatorios
+    # 3. Comprobar que contenga el modelo o términos clave obligatorios
     requeridos = producto.get("terminos_requeridos")
     if requeridos:
         for req in requeridos:
@@ -315,7 +380,7 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
                 if token.lower() not in texto:
                     return False
 
-    # 3. Comprobar precio mínimo razonable para evitar cables/accesorios
+    # 4. Comprobar precio mínimo razonable para evitar cables/accesorios
     precio_min = producto.get("precio_minimo_unidad")
     if precio_min is None:
         max_u = producto.get("precio_maximo_unidad")
@@ -496,12 +561,32 @@ def guardar_historico(producto, oferta, evaluacion):
 # TELEGRAM
 # ============================================================
 
+def obtener_credenciales_telegram():
+    token = (
+        os.getenv("TELEGRAM_BOT_TOKEN")
+        or os.getenv("BOT_TOKEN")
+        or os.getenv("bot_token")
+        or os.getenv("telegram_bot_token")
+    )
+    chat_id = (
+        os.getenv("TELEGRAM_CHAT_ID")
+        or os.getenv("CHAT_ID")
+        or os.getenv("chat_id")
+        or os.getenv("telegram_chat_id")
+    )
+    return (token.strip() if token else None), (str(chat_id).strip() if chat_id else None)
+
+
 def enviar_telegram(mensaje):
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    token, chat_id = obtener_credenciales_telegram()
 
     if not token or not chat_id:
-        print("  ⚠️ Falta configurar TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID.")
+        faltantes = []
+        if not token:
+            faltantes.append("TELEGRAM_BOT_TOKEN (o BOT_TOKEN en Secrets)")
+        if not chat_id:
+            faltantes.append("TELEGRAM_CHAT_ID (o CHAT_ID en Variables/Secrets)")
+        print(f"  ⚠️ No se puede enviar alerta. Falta: {', '.join(faltantes)}")
         return False
 
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -654,18 +739,20 @@ def generar_consultas(producto, config):
         consultas.append((f'"{modelo}" precio', "es-es"))
 
         if buscar_europa:
-            # 2. Amazon Europa (Alemania, Francia, Italia envían a España)
+            # 2. Amazon Unión Europea (Alemania, Francia, Italia envían a España)
             consultas.append((f'"{modelo}" amazon.de', "de-de"))
             consultas.append((f'"{modelo}" amazon.fr', "fr-fr"))
             consultas.append((f'"{modelo}" amazon.it', "it-it"))
 
-            # 3. Comparadores europeos líderes con envíos a España
-            consultas.append((f'"{modelo}" geizhals', "de-de"))
-            consultas.append((f'"{modelo}" idealo', "wt-wt"))
-            consultas.append((f'"{modelo}" shipping Spain', "wt-wt"))
+            # 3. Comparadores europeos líderes con envíos a España (dentro de la UE)
+            consultas.append((f'"{modelo}" geizhals.eu OR geizhals.de', "de-de"))
+            consultas.append((f'"{modelo}" idealo.de OR idealo.es OR idealo.fr', "de-de"))
+            consultas.append((f'"{modelo}" envio españa OR versand spanien', "es-es"))
 
         # 4. Búsqueda exacta limpia
-        consultas.append((f'"{modelo}"', "wt-wt"))
+        consultas.append((f'"{modelo}"', "es-es"))
+        if buscar_europa:
+            consultas.append((f'"{modelo}"', "de-de"))
 
     else:
         consultas.append((f"{busqueda} precio", "es-es"))
@@ -673,7 +760,9 @@ def generar_consultas(producto, config):
         if buscar_europa:
             consultas.append((f"{busqueda} amazon.de", "de-de"))
             consultas.append((f"{busqueda} geizhals", "de-de"))
-        consultas.append((busqueda, "wt-wt"))
+        consultas.append((busqueda, "es-es"))
+        if buscar_europa:
+            consultas.append((busqueda, "de-de"))
 
     # Deduplicar manteniendo orden
     vistos = set()
@@ -852,6 +941,18 @@ def main():
     modo_busqueda = "España + Europa con envío a España" if buscar_eu else "Solo España"
     print(f"Ámbito de rastreo: {modo_busqueda}")
     print(f"Productos activos a monitorizar: {len(productos_activos)}")
+
+    token, chat_id = obtener_credenciales_telegram()
+    if token:
+        preview = f"{token[:6]}...{token[-4:]}" if len(token) > 10 else "***"
+        print(f"🤖 Bot de Telegram: Conectado (Token: {preview})")
+    else:
+        print("⚠️ Bot de Telegram: Falta Token (revisa Secret 'TELEGRAM_BOT_TOKEN' o 'BOT_TOKEN')")
+
+    if chat_id:
+        print(f"💬 Chat de Telegram: Conectado (ID: {chat_id})")
+    else:
+        print("⚠️ Chat de Telegram: Falta Chat ID (revisa Variable 'TELEGRAM_CHAT_ID' o 'CHAT_ID')")
 
     for producto in productos_activos:
         print(f"\n🔎 Buscando: {producto['nombre']} (Modelo: {producto.get('busqueda')})")

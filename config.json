@@ -3,6 +3,7 @@
   "pais": "España",
   "moneda": "EUR",
   "buscar_en_europa": true,
+  "solo_union_europea": true,
   "envio_europa_estimado": 6.50,
   "incluir_envio": true,
   "exigir_envio_confirmado": false,

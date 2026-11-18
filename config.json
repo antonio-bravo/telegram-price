@@ -59,8 +59,8 @@
       "precio_maximo_por_unidad_medida": null,
       "cantidad": 1,
       "activo": false
-    }
-      {
+    },
+    {
       "id": "Halo-2",
       "nombre": "ScreenBar Halo 2",
       "busqueda": "ScreenBar Halo 2",
@@ -71,8 +71,8 @@
       "precio_maximo_por_unidad_medida": null,
       "cantidad": 1,
       "activo": true
-    }
-      {
+    },
+    {
       "id": "8BitDo-64",
       "nombre": "8BitDo 64 2.4G Wireless",
       "busqueda": "8BitDo 64 2.4",
@@ -84,7 +84,7 @@
       "cantidad": 1,
       "activo": true
     }
-      {
+    ,{
       "id": "Retrobit-Saturn",
       "nombre": "Retrobit - Sega Saturn",
       "busqueda": "Retrobit - Sega Saturn 2.4",

@@ -16,9 +16,9 @@
       "busqueda": "WD80EFPX",
       "capacidad": 8,
       "unidad_medida": "TB",
-      "precio_maximo_unidad": 160,
+      "precio_maximo_unidad": 383,
       "precio_maximo_pedido": null,
-      "precio_maximo_por_unidad_medida": 20,
+      "precio_maximo_por_unidad_medida": null,
       "cantidad": 2,
       "activo": true
     },
@@ -28,9 +28,9 @@
       "busqueda": "WD60EFPX",
       "capacidad": 6,
       "unidad_medida": "TB",
-      "precio_maximo_unidad": 287,
+      "precio_maximo_unidad": 310,
       "precio_maximo_pedido": null,
-      "precio_maximo_por_unidad_medida": 48,
+      "precio_maximo_por_unidad_medida": null,
       "cantidad": 2,
       "activo": true
     },

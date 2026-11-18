@@ -7,6 +7,7 @@ Monitor automático de precios configurable mediante `config.json` para rastrear
 ## 🚀 Características principales
 
 * **Rastreo en España y la Unión Europea (Sin aduanas):** Consulta automáticamente tiendas del mercado único de la UE (Amazon España, Alemania, Francia, Italia, Países Bajos, Geizhals, Idealo UE, PcComponentes, etc.). **Excluye Reino Unido (UK)**, EE.UU., Suiza y terceros países para evitar aranceles, DUA y costes de importación.
+* **Soporte para Wallapop y Vinted:** Rastrea anuncios de particulares en Wallapop y Vinted, calculando el importe final sumando el envío y el seguro de protección al comprador (4.50 €). Descarta automáticamente artículos rotos, averiados o para piezas.
 * **Gastos de envío a España incluidos:** 
   * Detecta envíos gratis en España e internacionales.
   * Si compras en una tienda europea (ej. Amazon Alemania), aplica el coste estimado de envío internacional a España (por defecto 6.50 €) si no viene desglosado en el texto, evitando que te sorprendan portes caros al pagar.
@@ -31,6 +32,8 @@ El comportamiento del monitor se controla desde `config.json`:
   "moneda": "EUR",
   "buscar_en_europa": true,
   "solo_union_europea": true,
+  "incluir_wallapop_vinted": true,
+  "envio_wallapop_vinted_estimado": 4.50,
   "envio_europa_estimado": 6.50,
   "incluir_envio": true,
   "exigir_envio_confirmado": false,

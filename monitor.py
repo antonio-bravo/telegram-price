@@ -69,6 +69,8 @@ def cargar_configuracion():
     config.setdefault("moneda", "EUR")
     config.setdefault("buscar_en_europa", True)
     config.setdefault("solo_union_europea", True)
+    config.setdefault("incluir_wallapop_vinted", True)
+    config.setdefault("envio_wallapop_vinted_estimado", 4.50)
     config.setdefault("envio_europa_estimado", 6.50)
     config.setdefault("incluir_envio", True)
     config.setdefault("exigir_envio_confirmado", False)
@@ -264,7 +266,8 @@ def es_tienda_ue(url):
     tiendas_ue_conocidas = [
         "amazon.es", "amazon.de", "amazon.fr", "amazon.it", "amazon.nl", "amazon.com.be",
         "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
-        "geizhals", "alternate", "caseking", "mindfactory", "ldlc", "mediamarkt"
+        "geizhals", "alternate", "caseking", "mindfactory", "ldlc", "mediamarkt",
+        "wallapop", "vinted"
     ]
     if any(t in domain for t in tiendas_ue_conocidas):
         return True
@@ -277,6 +280,12 @@ def detectar_tienda_y_pais(url):
     Identifica la tienda y el país a partir de la URL, marcando si es internacional dentro de la UE.
     """
     domain = urlparse(url).netloc.lower().removeprefix("www.")
+
+    # Marketplaces C2C (Segunda mano y ocasión en España y UE)
+    if "wallapop" in domain:
+        return "Wallapop", "🇪🇸 Wallapop (2ª mano)", False
+    if "vinted" in domain:
+        return "Vinted", "🇪🇺 Vinted (2ª mano)", True
 
     # Tiendas Amazon en la Unión Europea
     if "amazon.es" in domain:
@@ -356,15 +365,31 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
         if "£" in texto or "gbp" in texto or "$" in texto or "usd" in texto:
             return False
 
-    # 2. Comprobar exclusiones (reacondicionados, cables, carcasas, etc.)
-    exclusiones = (
-        producto.get("excluir_terminos")
-        if producto.get("excluir_terminos") is not None
-        else config.get("excluir_terminos", TERMINOS_EXCLUSION_DEFECTO)
-    )
-    for termino in exclusiones:
-        if termino.lower() in texto:
-            return False
+    # 2. Comprobar exclusiones
+    es_marketplace_c2c = "wallapop" in url.lower() or "vinted" in url.lower()
+
+    if es_marketplace_c2c:
+        # En Wallapop y Vinted se permite segunda mano / ocasión,
+        # pero se descartan piezas rotas, averiadas, defectuosas o accesorios
+        descartes_c2c = [
+            "para piezas", "averiado", "averiada", "no funciona",
+            "roto", "rota", "defectuoso", "defectuosa", "con fallos",
+            "sin probar", "bloqueado", "bloqueada",
+            "cable", "carcasa", "caddy", "funda", "dock", "adaptador"
+        ]
+        for termino in descartes_c2c:
+            if termino in texto:
+                return False
+    else:
+        # En tiendas convencionales se descarta reacondicionado, segunda mano y accesorios
+        exclusiones = (
+            producto.get("excluir_terminos")
+            if producto.get("excluir_terminos") is not None
+            else config.get("excluir_terminos", TERMINOS_EXCLUSION_DEFECTO)
+        )
+        for termino in exclusiones:
+            if termino.lower() in texto:
+                return False
 
     # 3. Comprobar que contenga el modelo o términos clave obligatorios
     requeridos = producto.get("terminos_requeridos")
@@ -396,10 +421,11 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
 # CALCULO DE COSTES Y EVALUACION DE CRITERIOS
 # ============================================================
 
-def calcular_costes(producto, precio, envio, config, es_internacional=False):
+def calcular_costes(producto, precio, envio, config, es_internacional=False, url=""):
     """
     Calcula el coste por unidad y del pedido completo.
     El envío a España se aplica una única vez al total del pedido.
+    Si es Wallapop o Vinted, aplica el coste de envío + seguro de protección al comprador.
     Si la tienda es de fuera de España y no indica el envío exacto,
     aplica el coste estimado de transporte internacional a España.
     """
@@ -407,7 +433,9 @@ def calcular_costes(producto, precio, envio, config, es_internacional=False):
     incluir_envio = config.get("incluir_envio", True)
     envio_por_defecto = config.get("envio_por_defecto", 4.50)
     envio_europa_estimado = config.get("envio_europa_estimado", 6.50)
+    envio_c2c_estimado = config.get("envio_wallapop_vinted_estimado", 4.50)
 
+    es_c2c = "wallapop" in url.lower() or "vinted" in url.lower()
     envio_conocido = envio is not None
     coste_envio = 0.0
     origen_envio = "Confirmado"
@@ -416,6 +444,9 @@ def calcular_costes(producto, precio, envio, config, es_internacional=False):
         if envio_conocido:
             coste_envio = float(envio)
             origen_envio = "GRATIS (0.00 €)" if coste_envio == 0.0 else f"{coste_envio:.2f} € (Confirmado en tienda)"
+        elif es_c2c:
+            coste_envio = float(envio_c2c_estimado)
+            origen_envio = f"{coste_envio:.2f} € (Envío + Protección al comprador estimado)"
         elif es_internacional:
             # Tienda europea enviando a España (ej. Amazon Alemania, Amazon Francia, etc.)
             coste_envio = float(envio_europa_estimado)
@@ -427,18 +458,23 @@ def calcular_costes(producto, precio, envio, config, es_internacional=False):
             coste_envio = 0.0
             origen_envio = "Desconocido"
 
-    # El envío se paga una sola vez por el pedido completo
-    total_pedido = (precio * cantidad) + coste_envio
-    total_unidad = total_pedido / cantidad
+    # En plataformas C2C de particulares (Wallapop/Vinted), los anuncios son casi siempre de 1 sola unidad
+    if es_c2c:
+        total_pedido = precio + coste_envio
+        total_unidad = total_pedido
+    else:
+        total_pedido = (precio * cantidad) + coste_envio
+        total_unidad = total_pedido / cantidad
 
     return {
         "precio_base": precio,
         "envio": envio,
         "envio_conocido": envio_conocido,
         "es_internacional": es_internacional,
+        "es_c2c": es_c2c,
         "coste_envio_aplicado": coste_envio,
         "origen_envio": origen_envio,
-        "cantidad": cantidad,
+        "cantidad": 1 if es_c2c else cantidad,
         "total_unidad": total_unidad,
         "total_pedido": total_pedido,
     }
@@ -658,7 +694,8 @@ def procesar_oferta(producto, oferta, config, estado):
         oferta["precio"],
         oferta["envio"],
         config,
-        es_internacional=oferta["es_internacional"]
+        es_internacional=oferta["es_internacional"],
+        url=oferta["url"]
     )
     precio_medida = calcular_precio_medida(producto, costes["total_unidad"])
     evaluacion = evaluar_oferta(producto, costes, precio_medida, config)
@@ -749,7 +786,14 @@ def generar_consultas(producto, config):
             consultas.append((f'"{modelo}" idealo.de OR idealo.es OR idealo.fr', "de-de"))
             consultas.append((f'"{modelo}" envio españa OR versand spanien', "es-es"))
 
-        # 4. Búsqueda exacta limpia
+        # 4. Marketplaces C2C (Wallapop y Vinted)
+        if config.get("incluir_wallapop_vinted", True):
+            consultas.append((f'"{modelo}" site:wallapop.com OR site:es.wallapop.com', "es-es"))
+            consultas.append((f'"{modelo}" site:vinted.es', "es-es"))
+            consultas.append((f'"{modelo}" wallapop', "es-es"))
+            consultas.append((f'"{modelo}" vinted', "es-es"))
+
+        # 5. Búsqueda exacta limpia
         consultas.append((f'"{modelo}"', "es-es"))
         if buscar_europa:
             consultas.append((f'"{modelo}"', "de-de"))
@@ -757,6 +801,9 @@ def generar_consultas(producto, config):
     else:
         consultas.append((f"{busqueda} precio", "es-es"))
         consultas.append((f"{busqueda} amazon", "es-es"))
+        if config.get("incluir_wallapop_vinted", True):
+            consultas.append((f"{busqueda} wallapop", "es-es"))
+            consultas.append((f"{busqueda} vinted", "es-es"))
         if buscar_europa:
             consultas.append((f"{busqueda} amazon.de", "de-de"))
             consultas.append((f"{busqueda} geizhals", "de-de"))

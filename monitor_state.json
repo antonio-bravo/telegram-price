@@ -47,6 +47,22 @@
     "d20f2624934835cc64723f48b2727af8e9614a933484ea2b23bd6aac7e657b54": {
       "precio": 44.5,
       "ultima_alerta": "2026-11-19T11:34:20.195917+00:00"
+    },
+    "75360eb1a31e0be10177bda7697395b8679e7cc88c1e297ab259f5d095a5d7f7": {
+      "precio": 404.5,
+      "ultima_alerta": null
+    },
+    "8e4324e8e3c483b9fe84de52638ee28f4e3e706a45db769824f13b150da54ca9": {
+      "precio": 204.5,
+      "ultima_alerta": "2026-11-19T12:07:24.373607+00:00"
+    },
+    "3d8e0efbfd4116ea5d1ef6af6829a32fc655733f7e9815d747818d54bb96ecc0": {
+      "precio": 304.5,
+      "ultima_alerta": "2026-11-19T12:07:24.793657+00:00"
+    },
+    "8ffb75abd539d1c5be5c19d67035cca802821d34e4d43ba25deb4d61bc61980c": {
+      "precio": 280.49,
+      "ultima_alerta": "2026-11-19T12:07:43.313341+00:00"
     }
   }
 }

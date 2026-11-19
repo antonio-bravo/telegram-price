@@ -146,9 +146,21 @@ def cargar_estado():
 def guardar_estado(estado):
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporal = STATE_FILE.with_suffix(".tmp")
-    with open(temporal, "w", encoding="utf-8") as f:
-        json.dump(estado, f, indent=2, ensure_ascii=False)
-    temporal.replace(STATE_FILE)
+    try:
+        with open(temporal, "w", encoding="utf-8") as f:
+            json.dump(estado, f, indent=2, ensure_ascii=False)
+        try:
+            temporal.replace(STATE_FILE)
+        except OSError:
+            # En contenedores Docker con bind-mount de archivo (- ./monitor_state.json:/app/monitor_state.json),
+            # Linux devuelve Errno 16 (Device or resource busy) al intentar renombrar sobre un mount point.
+            # En ese caso, escribimos directamente sobre el archivo montado.
+            with open(STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(estado, f, indent=2, ensure_ascii=False)
+            if temporal.exists():
+                temporal.unlink()
+    except Exception as e:
+        print(f"⚠️ Error al guardar estado: {e}")
 
 
 # ============================================================
@@ -445,6 +457,47 @@ DOMINIOS_FUERA_UE = (
     "ebuyer.com", "overclockers.co.uk", "box.co.uk", "vinted.co.uk"
 )
 
+DOMINIOS_IGNORADOS = (
+    "bing.com", "google.com", "yahoo.com", "duckduckgo.com", "doubleclick.net",
+    "yandex.com", "baidu.com", "msn.com"
+)
+
+
+def canonicalizar_url(url):
+    """
+    Normaliza URLs para evitar duplicados de un mismo producto
+    (ej. versiones multilingües de Amazon con /-/en/, parámetros de tracking de Wallapop, etc.)
+    """
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower().removeprefix("www.")
+
+        # Amazon: extraer ASIN canónico /dp/<ASIN>
+        if "amazon." in domain:
+            m_asin = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', parsed.path)
+            if m_asin:
+                asin = m_asin.group(1)
+                return f"https://www.{domain}/dp/{asin}"
+
+        # Wallapop: extraer ID canónico /item/<id>
+        if "wallapop.com" in domain:
+            m_w = re.search(r'/item/(?:.*-)?(\d+)', parsed.path)
+            if m_w:
+                return f"https://es.wallapop.com/item/{m_w.group(1)}"
+
+        # Vinted: extraer ID canónico /items/<id>
+        if "vinted." in domain:
+            m_v = re.search(r'/items/(\d+)', parsed.path)
+            if m_v:
+                return f"https://www.vinted.es/items/{m_v.group(1)}"
+
+        # Quitar parámetros de tracking si no es un marketplace especial
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    except Exception:
+        return url
+
 
 def es_entorno_datacenter():
     """
@@ -470,6 +523,8 @@ def es_tienda_bloqueada_en_datacenter(domain):
 
 def es_tienda_ue(url):
     domain = urlparse(url).netloc.lower().removeprefix("www.")
+    if any(ign in domain for ign in DOMINIOS_IGNORADOS):
+        return False
     if domain.endswith(DOMINIOS_FUERA_UE) or any(d in domain for d in DOMINIOS_FUERA_UE):
         return False
     partes = domain.split(".")
@@ -1185,14 +1240,20 @@ def buscar_producto(producto, pais_default, config):
         urls_fijas.extend(producto["urls"])
 
     for u in urls_fijas:
-        u_domain = urlparse(u).netloc.lower().removeprefix("www.")
+        canon_u = canonicalizar_url(u)
+        u_domain = urlparse(canon_u).netloc.lower().removeprefix("www.")
+        if any(ign in u_domain for ign in DOMINIOS_IGNORADOS) or canon_u in vistos or u in vistos:
+            continue
+
         if datacenter and es_tienda_bloqueada_en_datacenter(u_domain):
             print(f"   ℹ️ [Nube] Omitiendo visita directa a URL fija de {u_domain} para evitar bloqueo anti-bot")
             continue
 
-        directa = consultar_url_directa(u, producto, config)
+        directa = consultar_url_directa(canon_u, producto, config)
         if directa:
             if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
+                vistos.add(canon_u)
+                vistos.add(u)
                 vistos.add(directa["url"])
                 resultados.append(directa)
             else:
@@ -1205,8 +1266,15 @@ def buscar_producto(producto, pais_default, config):
             for consulta, region in consultas:
                 encontrados = buscar_en_ddgs(buscador, consulta, region)
                 for res in encontrados:
-                    url = res.get("href", "")
-                    if not url.startswith(("http://", "https://")) or url in vistos:
+                    raw_url = res.get("href", "")
+                    if not raw_url.startswith(("http://", "https://")):
+                        continue
+
+                    url = canonicalizar_url(raw_url)
+                    domain = urlparse(url).netloc.lower().removeprefix("www.")
+
+                    # Descartar buscadores, redes publicitarias (ej. bing.com/aclick) y URLs ya vistas
+                    if any(ign in domain for ign in DOMINIOS_IGNORADOS) or url in vistos or raw_url in vistos:
                         continue
 
                     # 🛡️ CORRECCIÓN CLAVE: Ignorar páginas de búsqueda de Amazon (/s?).
@@ -1217,7 +1285,6 @@ def buscar_producto(producto, pais_default, config):
                     titulo = res.get("title", "")
                     descripcion = res.get("body", "")
                     texto = f"{titulo} {descripcion}"
-                    domain = urlparse(url).netloc.lower().removeprefix("www.")
 
                     # COMPROBAR SI ES UNA TIENDA QUE BLOQUEA SERVIDORES
                     es_bloqueada = datacenter and es_tienda_bloqueada_en_datacenter(domain)
@@ -1240,11 +1307,16 @@ def buscar_producto(producto, pais_default, config):
                                 if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
                                     resultados.append(directa)
                                     vistos.add(url)
+                                    vistos.add(raw_url)
+                                    vistos.add(directa["url"])
                                 else:
                                     print(f"   ⏭️ Descartado por filtros/precio: {directa['precio']:.2f} € en {directa['tienda']}")
+                                    vistos.add(url)
+                                    vistos.add(raw_url)
                             else:
                                 # Si la visita directa falla o no tiene precio, no nos fiamos del snippet
                                 vistos.add(url)
+                                vistos.add(raw_url)
                         continue
 
                     # TIENDA BLOQUEADA EN CENTRO DE DATOS (Amazon, Wallapop, Vinted)
@@ -1257,6 +1329,7 @@ def buscar_producto(producto, pais_default, config):
                         continue
 
                     vistos.add(url)
+                    vistos.add(raw_url)
                     tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
                     envio = extraer_envio(texto)
 

@@ -295,6 +295,37 @@ def extraer_precio(texto):
         except ValueError:
             pass
 
+    # 6B. Microdata itemprop="price" (PrestaShop, Informática Barata, Shop Duty Free, WooCommerce, etc.)
+    m_itemprop = re.search(
+        r'<[^>]+itemprop=[\'"]price[\'"][^>]*content=[\'"]([^\'"]+)[\'"]',
+        texto_limpio,
+        re.IGNORECASE
+    ) or re.search(
+        r'<[^>]+content=[\'"]([^\'"]+)[\'"][^>]*itemprop=[\'"]price[\'"]',
+        texto_limpio,
+        re.IGNORECASE
+    )
+    if m_itemprop:
+        try:
+            p = convertir_numero(m_itemprop.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    m_itemprop_txt = re.search(
+        r'<[^>]+itemprop=[\'"]price[\'"][^>]*>([^<]+)<',
+        texto_limpio,
+        re.IGNORECASE
+    )
+    if m_itemprop_txt:
+        try:
+            p = convertir_numero(m_itemprop_txt.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
     # 7. SELECTORES HTML ESPECÍFICOS DE AMAZON
     # A) <span class="a-offscreen">179,00 €</span>
     for m in re.finditer(r'<span[^>]*class=[\'"][^\'"]*a-offscreen[^\'"]*[\'"][^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE):
@@ -560,7 +591,7 @@ def es_tienda_ue(url):
         "amazon.es", "amazon.de", "amazon.fr", "amazon.it", "amazon.nl", "amazon.com.be",
         "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
         "geizhals", "alternate", "caseking", "mindfactory", "ldlc", "mediamarkt",
-        "wallapop", "vinted"
+        "wallapop", "vinted", "informaticabarata", "shopdutyfree"
     ]
     if any(t in domain for t in tiendas_ue_conocidas):
         return True
@@ -591,9 +622,13 @@ def detectar_tienda_y_pais(url):
     if "pccomponentes" in domain:
         if domain.endswith(".pt"): return "PcComponentes Portugal", "🇵🇹 Portugal", True
         return "PcComponentes", "🇪🇸 España", False
+    if "informaticabarata" in domain:
+        return "Informática Barata", "🇪🇸 España", False
+    if "shopdutyfree" in domain:
+        return "Shop Duty Free", "🇪🇸 España", False
     if domain.endswith((".co.uk", ".uk")) or "amazon.co.uk" in domain:
         return domain, "🇬🇧 Reino Unido (Fuera UE)", True
-    if domain.endswith(".es") or any(t in domain for t in ["pccomponentes", "coolmod", "neobyte", "aussar", "senetic"]):
+    if domain.endswith(".es") or any(t in domain for t in ["pccomponentes", "coolmod", "neobyte", "aussar", "senetic", "informaticabarata", "shopdutyfree"]):
         return domain, "🇪🇸 España", False
     if "geizhals" in domain:
         return "Geizhals (Europa)", "🇪🇺 Europa (UE)", True
@@ -1093,7 +1128,12 @@ def generar_consultas(producto, config):
     # 1. BÚSQUEDA AGRUPADA EUROPA: Forzamos la inclusión de divisa para que el snippet de DDG traiga el precio
     if buscar_europa:
         consultas.append((
-            f'"{termino}" (site:amazon.es OR site:amazon.de OR site:amazon.it OR site:pccomponentes.com OR site:mediamarkt.es OR site:geizhals.de OR site:idealo.es OR site:idealo.de) ("€" OR "EUR")', 
+            f'"{termino}" (site:amazon.es OR site:amazon.de OR site:amazon.it OR site:pccomponentes.com OR site:mediamarkt.es OR site:geizhals.de OR site:idealo.es OR site:idealo.de OR site:informaticabarata.com OR site:shopdutyfree.es) ("€" OR "EUR")', 
+            "es-es"
+        ))
+        # 1B. Tiendas especializadas España (búsqueda dedicada para Informática Barata y Shop Duty Free)
+        consultas.append((
+            f'"{termino}" (site:informaticabarata.com OR site:shopdutyfree.es)', 
             "es-es"
         ))
     
@@ -1369,7 +1409,9 @@ def buscar_producto(producto, pais_default, config):
     # 2. Búsqueda con DuckDuckGo (para PcComponentes, Wallapop, Vinted, Idealo, MediaMarkt, etc.)
     try:
         with DDGS() as buscador:
-            for consulta, region in consultas:
+            for i, (consulta, region) in enumerate(consultas):
+                if i > 0:
+                    time.sleep(random.uniform(0.6, 1.2))
                 encontrados = buscar_en_ddgs(buscador, consulta, region)
                 for res in encontrados:
                     raw_url = res.get("href", "")

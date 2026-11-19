@@ -657,6 +657,7 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
                 return False
 
     # 3. Comprobar que contenga el modelo o términos clave obligatorios
+    texto_titulo_url = f"{titulo} {url}".lower()
     requeridos = producto.get("terminos_requeridos")
     if requeridos:
         for req in requeridos:
@@ -665,10 +666,22 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
     else:
         tokens = producto.get("busqueda", "").split()
         for token in tokens:
-            # CAMBIO: Exigimos que CUALQUIER token de más de 2 caracteres esté en el texto.
-            # Antes se ignoraba "64" porque no tenía letras. Ahora se exige su presencia.
-            if len(token) >= 3 and token.lower() not in texto:
-                return False
+            token_clean = token.lower().strip()
+            if len(token_clean) < 3:
+                continue
+
+            # Si el token es un código de modelo técnico (contiene letras y números, ej. WD60EFPX, WD80EFPX)
+            # EXIGIMOS que esté presente en el TÍTULO o en la URL del producto.
+            # No basta con que aparezca en la descripción o resumen de búsqueda, porque páginas de modelos antiguos (ej. WD60EFRX)
+            # suelen mencionar modelos modernos en carruseles de sugerencias o comparativas.
+            es_codigo_modelo = bool(re.search(r'[a-z]', token_clean) and re.search(r'\d', token_clean) and len(token_clean) >= 4)
+            if es_codigo_modelo:
+                modelo_base = token_clean.split("-")[0]
+                if token_clean not in texto_titulo_url and modelo_base not in texto_titulo_url:
+                    return False
+            else:
+                if token_clean not in texto:
+                    return False
 
     # 4. Comprobar concordancia de capacidad (ej. evitar alertar de 4TB si se busca 8TB)
     capacidad = producto.get("capacidad")

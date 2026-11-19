@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.15-slim
 
 # Evitar buffers en Python y prompts interactivos
 ENV PYTHONUNBUFFERED=1 \

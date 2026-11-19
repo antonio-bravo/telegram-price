@@ -764,56 +764,67 @@ def buscar_en_ddgs(buscador, consulta, region):
 def consultar_url_directa(url, producto, config):
     session = get_robust_session()
     
-    headers = BASE_HEADERS.copy()
-    headers["User-Agent"] = random.choice(USER_AGENTS)
+    # HEADERS ULTRA-REALISTAS DE CHROME 124 EN WINDOWS
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-User": "?1",
+        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        "Sec-Ch-Ua-Mobile": "?0",
+        "Sec-Ch-Ua-Platform": '"Windows"',
+        "Cache-Control": "max-age=0",
+        "DNT": "1"
+    }
     
-    # Forzar estrictamente español para evitar que Amazon muestre la versión de EE.UU.
-    headers["Accept-Language"] = "es-ES,es;q=0.9,en;q=0.8"
-    
-    # Forzar cookies de localización española en Amazon
+    # Forzar cookies de localización española
     if "amazon.es" in url:
         session.cookies.set('lc-main', 'es_ES', domain='.amazon.es')
         session.cookies.set('frc', 'es_ES', domain='.amazon.es')
+        session.cookies.set('ubid-main', '132-0000000-0000000', domain='.amazon.es') # Cookie de sesión falsa pero válida
     
     try:
-        respuesta = session.get(url, headers=headers, timeout=(3.0, 8.0))
+        respuesta = session.get(url, headers=headers, timeout=(5.0, 10.0))
         
         if respuesta.status_code != 200:
-            if respuesta.status_code in [403, 503]:
-                print(f"   🚫 Bloqueado ({respuesta.status_code}) por el sitio web (posible CAPTCHA o IP de GitHub): {urlparse(url).netloc}")
-            else:
-                print(f"   ⚠️ Error HTTP {respuesta.status_code} en {urlparse(url).netloc}")
+            print(f"   🚫 Error HTTP {respuesta.status_code} en {urlparse(url).netloc}")
             return None
             
         texto = respuesta.text
         
-        # Diagnóstico de producto agotado (solo si realmente lo está en la versión española)
+        # DIAGNÓSTICO: Si no encontramos precio, imprimimos qué nos devolvió Amazon
+        precio = extraer_precio(texto)
+        if not precio:
+            # Limpiamos saltos de línea para que se vea en una sola línea en la consola
+            debug_text = texto[:400].replace('\n', ' ').replace('\r', ' ')
+            print(f"   🔍 DEBUG: Amazon devolvió esto en lugar del precio: '{debug_text}...'")
+            
+            # Comprobación explícita de CAPTCHA
+            if "captcha" in texto.lower() or "enter the characters" in texto.lower() or "robot" in texto.lower():
+                print("   🚨 CONFIRMADO: Amazon ha detectado el script y muestra un CAPTCHA. requests no puede superar esto.")
+            
+            return None
+            
+        # Filtros de agotado/vendido (se mantienen)
         if "amazon." in url.lower():
             if re.search(r'(?:currently unavailable|temporarily out of stock|no disponible|agotado|sin stock)', texto, re.IGNORECASE):
-                # Comprobamos si es un falso positivo buscando si hay un precio en el JSON a pesar del mensaje
                 if not re.search(r'"priceToPay":\s*\{[^}]*"amount"', texto):
                     print(f"   ⏭️ Descartado: Producto agotado/sin stock en Amazon: {urlparse(url).netloc}")
                     return None
 
-        # Filtro de disponibilidad para Wallapop y Vinted
         if "wallapop" in url.lower() or "vinted" in url.lower():
             titulo_pagina = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
             if titulo_pagina:
                 titulo = titulo_pagina.group(1).lower()
-                palabras_no_disponible = ["vendido", "reservado", "sold", "vendu", "verkauft", "no disponible", "non disponible"]
-                if any(palabra in titulo for palabra in palabras_no_disponible):
-                    print(f"   ⏭️ Descartado (Vendido/Reservado en título): {url}")
+                if any(p in titulo for p in ["vendido", "reservado", "sold", "vendu", "verkauft", "no disponible"]):
                     return None
-            
-            if re.search(r'(?:estado|statut|status).*?:.*?(?:vendido|sold|verkauft|vendu|reservado|réservé)', texto, re.IGNORECASE):
-                print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
-                return None
 
-        precio = extraer_precio(texto)
-        if not precio:
-            print(f"   ⚠️ No se pudo extraer el precio del HTML (posible cambio de diseño o bloqueo parcial): {urlparse(url).netloc}")
-            return None
-            
         tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
         envio = extraer_envio(texto)
         
@@ -833,13 +844,10 @@ def consultar_url_directa(url, producto, config):
             "titulo": producto["nombre"],
         }
         
-    except requests.exceptions.ConnectionError as e:
-        print(f"   ⚠️ Conexión rechazada tras varios intentos en {urlparse(url).netloc}: {e}")
-        return None
     except Exception as e:
         print(f"   ⚠️ Error inesperado en {url}: {e}")
         return None
-        
+                        
 def buscar_producto(producto, pais_default, config):
     consultas = generar_consultas(producto, config)
     resultados = []

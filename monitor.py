@@ -1,5 +1,6 @@
 import csv
 import hashlib
+import html
 import json
 import os
 import re
@@ -10,11 +11,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-# LIBRERÍA CLAVE: Imita perfectamente la huella digital de Chrome
-from curl_cffi import requests as curl_requests
+# LIBRERÍA CLAVE: Imita la huella digital TLS de Chrome (con fallback seguro)
+try:
+    from curl_cffi import requests as curl_requests
+except ImportError:
+    curl_requests = None
 
-# Mantenemos requests estándar SOLO para enviar mensajes a Telegram
+# Mantenemos requests estándar para Telegram y reintentos
 import requests 
+import urllib3
+from requests.adapters import HTTPAdapter
 from ddgs import DDGS
 
 
@@ -148,44 +154,122 @@ def guardar_estado(estado):
 # ============================================================
 
 def convertir_numero(texto):
-    texto = texto.strip().replace("\u00a0", "").replace(" ", "")
-    if "," in texto and "." in texto:
-        if texto.rfind(",") > texto.rfind("."):
-            texto = texto.replace(".", "").replace(",", ".")
+    if isinstance(texto, (int, float)):
+        return float(texto)
+    texto = str(texto).replace("\u00a0", " ").replace("&nbsp;", " ")
+    # Extraer el primer bloque numérico limpio (soporta 1.234,56 o 1234.56 o 179)
+    m = re.search(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d+)?)", texto)
+    if not m:
+        raise ValueError(f"No se encontró un número válido en: {texto}")
+    num_str = m.group(1).strip()
+    if "," in num_str and "." in num_str:
+        if num_str.rfind(",") > num_str.rfind("."):
+            num_str = num_str.replace(".", "").replace(",", ".")
         else:
-            texto = texto.replace(",", "")
-    elif "," in texto:
-        texto = texto.replace(",", ".")
-    return float(texto)
+            num_str = num_str.replace(",", "")
+    elif "," in num_str:
+        num_str = num_str.replace(",", ".")
+    return float(num_str)
 
 
 def extraer_precio(texto):
-    # 1. ELIMINAR FALSOS POSITIVOS DE FILTROS LATERALES 
+    if not texto:
+        return None
+
+    # Desescapar entidades HTML (como &nbsp;, &#8364;, etc.)
+    texto_unescaped = html.unescape(texto)
+
+    # 1. ELIMINAR FALSOS POSITIVOS DE FILTROS LATERALES
     texto_limpio = re.sub(
         r'(?:under|moins de|sous|menos de|unter|less than|sotto|gifts under|regalos por debajo de|cadeaux de moins de)\s+\d+(?:[.,]\d+)?\s*(?:€|eur|euros?)', 
         '', 
-        texto, 
+        texto_unescaped, 
         flags=re.IGNORECASE
     )
-    
-    # 2. NUEVO: Buscar precios en el JSON interno de Amazon (muy fiable)
-    # Ejemplo: "priceToPay":{"amount":"152.15","currency":"EUR"}
-    json_price = re.search(r'"priceToPay":\s*\{[^}]*"amount"\s*:\s*"([\d.,]+)"', texto_limpio)
-    if json_price:
+
+    # 2. Schema.org JSON-LD (Amazon y tiendas europeas estándar)
+    # Busca bloques <script type="application/ld+json"> que contengan "price"
+    for m in re.finditer(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', texto_limpio, re.DOTALL | re.IGNORECASE):
         try:
-            return convertir_numero(json_price.group(1))
-        except ValueError:
+            datos_ld = json.loads(m.group(1))
+            bloques = datos_ld if isinstance(datos_ld, list) else [datos_ld]
+            for b in bloques:
+                offers = b.get("offers")
+                if offers:
+                    if isinstance(offers, list) and offers:
+                        offers = offers[0]
+                    if isinstance(offers, dict) and "price" in offers:
+                        precio_ld = convertir_numero(offers["price"])
+                        if 1 <= precio_ld <= 100000:
+                            return precio_ld
+        except Exception:
             pass
-            
-    # Ejemplo alternativo: "price_string":"152,15 €"
-    json_price_2 = re.search(r'"price_string"\s*:\s*"([\d.,]+\s*€)"', texto_limpio)
-    if json_price_2:
+
+    # 3. SELECTORES HTML ESPECÍFICOS DE AMAZON
+    # A) <span class="a-offscreen">179,00 €</span>
+    for m in re.finditer(r'<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE):
         try:
-            return convertir_numero(json_price_2.group(1))
+            p = convertir_numero(m.group(1))
+            if 1 <= p <= 100000:
+                return p
         except ValueError:
             pass
 
-    # 3. Patrones regex normales como respaldo
+    # B) <span class="a-price-whole">179<span class="a-price-decimal">,</span></span><span class="a-price-fraction">00</span>
+    m_whole = re.search(
+        r'<span[^>]*class="[^"]*a-price-whole[^"]*"[^>]*>([\d.,]+)[^<]*(?:<span[^>]*>[^<]*</span>)?</span>\s*<span[^>]*class="[^"]*a-price-fraction[^"]*"[^>]*>(\d{2})</span>',
+        texto_limpio,
+        re.IGNORECASE
+    )
+    if m_whole:
+        try:
+            entero = m_whole.group(1).replace(".", "").replace(",", "")
+            fraccion = m_whole.group(2)
+            p = float(f"{entero}.{fraccion}")
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    # C) Meta tags OpenGraph / Twitter (ej. <meta property="og:price:amount" content="179.00">)
+    m_meta = re.search(
+        r'<meta[^>]+(?:property|name)="[^"]*(?:price:amount|data1)"[^>]+content="([^"]+)"',
+        texto_limpio,
+        re.IGNORECASE
+    )
+    if m_meta:
+        try:
+            p = convertir_numero(m_meta.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    # 4. JSON INTERNO DE AMAZON (priceToPay, buyingPrice, priceAmount)
+    # Ejemplo: "priceToPay":{"amount":179.00,"currency":"EUR"} o con comillas "179.00"
+    json_price = re.search(
+        r'"(?:priceToPay|buyingPrice|priceAmount)"\s*:\s*\{[^}]*"amount"\s*:\s*"?([\d.,]+)"?',
+        texto_limpio,
+        re.IGNORECASE | re.DOTALL
+    )
+    if json_price:
+        try:
+            p = convertir_numero(json_price.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    json_price_2 = re.search(r'"price_string"\s*:\s*"([^"]+)"', texto_limpio, re.IGNORECASE)
+    if json_price_2:
+        try:
+            p = convertir_numero(json_price_2.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    # 5. PATRONES REGEX GENERALES (para resúmenes DDG y texto plano)
     patrones = [
         r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*€",
         r"€\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)",
@@ -714,32 +798,28 @@ def generar_consultas(producto, config):
     modelos = [t for t in tokens if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 5]
 
     if modelos:
-        modelo_completo = modelos[0]
-        modelo_base = modelo_completo.split("-")[0] 
-
-        # 1. BÚSQUEDA AGRUPADA EUROPA (Reemplaza 6 búsquedas por 1 sola)
-        if buscar_europa:
-            consultas.append((
-                f'"{modelo_base}" (site:amazon.es OR site:amazon.de OR site:amazon.fr OR site:amazon.it OR site:pccomponentes.com OR site:geizhals.eu OR site:idealo.es)', 
-                "es-es"
-            ))
-        
-        # 2. BÚSQUEDA GENERAL DE PRECIO
-        consultas.append((f'"{modelo_base}" precio OR oferta', "es-es"))
-
-        # 3. MARKETPLACES C2C (Wallapop / Vinted) - Agrupados y con filtros de vendido
-        if config.get("incluir_wallapop_vinted", True):
-            consultas.append((
-                f'"{modelo_completo}" (site:wallapop.com OR site:es.wallapop.com OR site:vinted.es OR site:vinted.fr) -vendido -reservado -sold -site:.co.uk', 
-                "es-es"
-            ))
-        
-        # 4. BÚSQUEDA DE RESPALDO (Sin comillas, más amplia)
-        consultas.append((f'{modelo_base} comprar', "es-es"))
+        termino = modelos[0].split("-")[0]
+        termino_c2c = modelos[0]
     else:
-        consultas.append((f"{busqueda} precio OR oferta", "es-es"))
-        if config.get("incluir_wallapop_vinted", True):
-            consultas.append((f"{busqueda} (site:wallapop.com OR site:vinted.es) -vendido -reservado", "es-es"))
+        termino = busqueda
+        termino_c2c = busqueda
+
+    # 1. BÚSQUEDA AGRUPADA EUROPA: Forzamos la inclusión de divisa para que el snippet de DDG traiga el precio
+    if buscar_europa:
+        consultas.append((
+            f'"{termino}" (site:amazon.es OR site:amazon.de OR site:amazon.it OR site:pccomponentes.com OR site:geizhals.de OR site:idealo.es OR site:idealo.de) ("€" OR "EUR")', 
+            "es-es"
+        ))
+    
+    # 2. MARKETPLACES C2C (Wallapop / Vinted): Exigimos divisa y excluimos vendidos
+    if config.get("incluir_wallapop_vinted", True):
+        consultas.append((
+            f'"{termino_c2c}" (site:wallapop.com OR site:vinted.es) -vendido -reservado ("€" OR "EUR")', 
+            "es-es"
+        ))
+    
+    # 3. BÚSQUEDA GENERAL DE PRECIO
+    consultas.append((f'"{termino}" precio oferta ("€" OR "EUR")', "es-es"))
 
     # Eliminar duplicados
     vistos = set()
@@ -751,48 +831,70 @@ def generar_consultas(producto, config):
     return unicas
 
 def buscar_en_ddgs(buscador, consulta, region):
-    # Solo intentamos 'auto' y, si falla, 'html'. 'lite' a veces da formatos raros.
-    # max_results=6 es suficiente y mucho más rápido que 15.
-    for backend in ["auto", "html"]:
+    # En GitHub Actions, DuckDuckGo limita rápidamente si se consulta muy rápido.
+    # Probamos auto, html y lite con reintento si hay rate limit.
+    for backend in ["auto", "html", "lite"]:
         try:
-            res = buscador.text(consulta, region=region, backend=backend, max_results=6)
+            res = buscador.text(consulta, region=region, backend=backend, max_results=10)
             if res:
                 return list(res)
-        except Exception:
+        except Exception as e:
+            err = str(e).lower()
+            if "429" in err or "ratelimit" in err or "202" in err:
+                print(f"   ⏳ Rate limit de DuckDuckGo en '{backend}'. Pausando 3s antes del siguiente intento...")
+                time.sleep(3.0)
             continue
     return []
 
 
 def consultar_url_directa(url, producto, config):
     try:
-        # impersonate="chrome124" engaña a los firewalls (Cloudflare/AWS WAF) 
-        # haciéndoles creer que la petición viene de un Chrome real en Windows.
-        respuesta = curl_requests.get(
-            url,
-            impersonate="chrome124",
-            timeout=(5.0, 10.0)
-        )
+        # Si curl_cffi está disponible, imita la huella TLS de Chrome
+        if curl_requests:
+            try:
+                respuesta = curl_requests.get(
+                    url,
+                    impersonate="chrome124",
+                    timeout=(5.0, 10.0)
+                )
+            except Exception:
+                respuesta = None
+        else:
+            respuesta = None
+
+        # Fallback con requests estándar
+        if respuesta is None:
+            session = get_robust_session()
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+                "Referer": "https://www.google.com/",
+            }
+            if "amazon." in url:
+                domain = urlparse(url).netloc.lower()
+                if not domain.startswith("."):
+                    domain = "." + domain
+                session.cookies.set('lc-main', 'es_ES', domain=domain)
+                session.cookies.set('i18n-prefs', 'EUR', domain=domain)
+            respuesta = session.get(url, headers=headers, timeout=(5.0, 10.0))
         
         if respuesta.status_code != 200:
-            print(f"   🚫 Error HTTP {respuesta.status_code} en {urlparse(url).netloc}")
+            if respuesta.status_code in [403, 503]:
+                print(f"   🚫 Bloqueado ({respuesta.status_code}) por el sitio web: {urlparse(url).netloc}")
+            else:
+                print(f"   🚫 Error HTTP {respuesta.status_code} en {urlparse(url).netloc}")
             return None
             
         texto = respuesta.text
+        texto_lower = texto.lower()
         
-        # Diagnóstico de seguridad (por si acaso algún sitio es extremadamente estricto)
-        if "captcha" in texto.lower() or "robot" in texto.lower() or "enter the characters" in texto.lower():
-            print(f"   🚨 Bloqueo de seguridad detectado en {urlparse(url).netloc}")
+        # 1. Detección de CAPTCHA / Robot Check
+        if "validatecaptcha" in texto_lower or "enter the characters" in texto_lower or "robot check" in texto_lower or ("algo ha salido mal" in texto_lower and "captcha" in texto_lower):
+            print(f"   🚨 Bloqueo con CAPTCHA detectado en {urlparse(url).netloc} (habitual en visitas directas a Amazon desde servidores)")
             return None
 
-        # Comprobación de stock en Amazon
-        if "amazon." in url.lower():
-            if re.search(r'(?:currently unavailable|temporarily out of stock|no disponible|agotado|sin stock)', texto, re.IGNORECASE):
-                # Si está agotado, pero aún así tiene precio en el JSON, lo respetamos (a veces pasa en preventas)
-                if not re.search(r'"priceToPay":\s*\{[^}]*"amount"', texto):
-                    print(f"   ⏭️ Descartado: Producto agotado/sin stock en Amazon: {urlparse(url).netloc}")
-                    return None
-
-        # Filtro de disponibilidad para Wallapop y Vinted
+        # 2. Filtro de disponibilidad para Wallapop y Vinted
         if "wallapop" in url.lower() or "vinted" in url.lower():
             titulo_pagina = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
             if titulo_pagina:
@@ -805,9 +907,14 @@ def consultar_url_directa(url, producto, config):
                 print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
                 return None
 
+        # 3. Intentar extraer precio
         precio = extraer_precio(texto)
         if not precio:
-            print(f"   ⚠️ No se pudo extraer el precio del HTML: {urlparse(url).netloc}")
+            # Solo si NO hay precio comprobamos si está agotado en Amazon
+            if "amazon." in url.lower() and re.search(r'(?:currently unavailable|temporarily out of stock|no disponible|agotado|sin stock)', texto, re.IGNORECASE):
+                print(f"   ⏭️ Descartado: Producto sin precio / agotado en Amazon: {urlparse(url).netloc}")
+            else:
+                print(f"   ⚠️ No se pudo extraer el precio del HTML en {urlparse(url).netloc}")
             return None
             
         tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
@@ -877,10 +984,12 @@ def buscar_producto(producto, pais_default, config):
 
                     # B. LÓGICA DE RESPALDO: Si no hay precio, pero es tienda fiable, visitamos la URL
                     if precio is None:
+                        # En GitHub Actions (IPs de centro de datos Azure), Amazon, Wallapop y Vinted bloquean
+                        # visitas directas con 403 o CAPTCHA. Para ellos dependemos de que DDG traiga el precio.
+                        # Solo visitamos directamente tiendas de hardware/comparadores que no bloquean centros de datos.
                         tiendas_fiables = [
-                            "amazon.es", "amazon.de", "amazon.fr", "amazon.it", "amazon.nl",
                             "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
-                            "geizhals", "idealo", "wallapop", "vinted"
+                            "geizhals", "idealo", "alternate", "caseking", "ldlc"
                         ]
                         es_tienda_fiable = any(tienda in url.lower() for tienda in tiendas_fiables)
                         
@@ -892,8 +1001,11 @@ def buscar_producto(producto, pais_default, config):
                             print(f"   🔍 Precio no visible en resumen DDG, visitando URL directa: {url}")
                             directa = consultar_url_directa(url, producto, config)
                             if directa:
-                                resultados.append(directa)
-                                vistos.add(url)
+                                if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
+                                    resultados.append(directa)
+                                    vistos.add(url)
+                                else:
+                                    print(f"   ⏭️ Descartado por filtros/precio mínimo: {directa['precio']:.2f} € en {directa['tienda']}")
                         
                         continue # Pasamos al siguiente resultado de DDG
 
@@ -922,8 +1034,8 @@ def buscar_producto(producto, pais_default, config):
                         "titulo": titulo,
                     })
                 
-                # Pausa humana entre cada consulta de búsqueda
-                time.sleep(random.uniform(1.0, 2.0))
+                # Pausa humana entre cada consulta de búsqueda (evita rate limits de DDG)
+                time.sleep(random.uniform(2.0, 3.5))
                 
     except Exception as error:
         print(f"Error general en buscador para '{producto['nombre']}': {error}")
@@ -976,7 +1088,7 @@ def main():
             procesar_oferta(producto, oferta, config, estado)
 
         # time.sleep(1.5)
-        time.sleep(random.uniform(1.5, 3.0)) # Pausa más larga entre productos diferentes
+        time.sleep(random.uniform(3.0, 5.0)) # Pausa prudencial entre productos para no saturar DuckDuckGo desde GitHub Actions
 
     # Guardamos el estado solo para recordar qué ofertas ya fueron notificadas
     guardar_estado(estado)

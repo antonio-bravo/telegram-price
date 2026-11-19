@@ -465,8 +465,7 @@ DOMINIOS_IGNORADOS = (
 
 def canonicalizar_url(url):
     """
-    Normaliza URLs para evitar duplicados de un mismo producto
-    (ej. versiones multilingües de Amazon con /-/en/, parámetros de tracking de Wallapop, etc.)
+    Normaliza URLs para limpiar parámetros de tracking sin romper la ruta original del marketplace.
     """
     if not url:
         return url
@@ -474,27 +473,53 @@ def canonicalizar_url(url):
         parsed = urlparse(url)
         domain = parsed.netloc.lower().removeprefix("www.")
 
-        # Amazon: extraer ASIN canónico /dp/<ASIN>
+        # Amazon: unificar a https://www.amazon.<tld>/dp/<ASIN>
         if "amazon." in domain:
             m_asin = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', parsed.path)
             if m_asin:
                 asin = m_asin.group(1)
                 return f"https://www.{domain}/dp/{asin}"
 
-        # Wallapop: extraer ID canónico /item/<id>
+        # Para Wallapop, Vinted y el resto de tiendas, conservar la ruta completa limpia de query params.
+        # ¡IMPORTANTE!: Wallapop requiere el slug del producto en la URL para no devolver HTTP 404.
+        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+    except Exception:
+        return url
+
+
+def clave_deduplicacion_url(url):
+    """
+    Genera una clave única de producto para evitar procesar la misma oferta duplicada
+    (ej. el mismo ASIN de Amazon o el mismo ID de anuncio de Wallapop/Vinted/eBay)
+    sin modificar la URL original necesaria para visitar la web.
+    """
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower().removeprefix("www.")
+
+        if "amazon." in domain:
+            m_asin = re.search(r'/(?:dp|gp/product)/([A-Z0-9]{10})', parsed.path)
+            if m_asin:
+                return f"amazon:{domain}:{m_asin.group(1)}"
+
         if "wallapop.com" in domain:
             m_w = re.search(r'/item/(?:.*-)?(\d+)', parsed.path)
             if m_w:
-                return f"https://es.wallapop.com/item/{m_w.group(1)}"
+                return f"wallapop:{m_w.group(1)}"
 
-        # Vinted: extraer ID canónico /items/<id>
         if "vinted." in domain:
             m_v = re.search(r'/items/(\d+)', parsed.path)
             if m_v:
-                return f"https://www.vinted.es/items/{m_v.group(1)}"
+                return f"vinted:{m_v.group(1)}"
 
-        # Quitar parámetros de tracking si no es un marketplace especial
-        return f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+        if "ebay." in domain:
+            m_e = re.search(r'/itm/(?:.*-)?(\d+)', parsed.path)
+            if m_e:
+                return f"ebay:{m_e.group(1)}"
+
+        return canonicalizar_url(url)
     except Exception:
         return url
 
@@ -1321,7 +1346,8 @@ def buscar_producto(producto, pais_default, config):
     for u in urls_fijas:
         canon_u = canonicalizar_url(u)
         u_domain = urlparse(canon_u).netloc.lower().removeprefix("www.")
-        if any(ign in u_domain for ign in DOMINIOS_IGNORADOS) or canon_u in vistos or u in vistos:
+        u_dedup = clave_deduplicacion_url(canon_u)
+        if any(ign in u_domain for ign in DOMINIOS_IGNORADOS) or canon_u in vistos or u in vistos or u_dedup in vistos:
             continue
 
         if datacenter and es_tienda_bloqueada_en_datacenter(u_domain):
@@ -1333,6 +1359,7 @@ def buscar_producto(producto, pais_default, config):
             if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
                 vistos.add(canon_u)
                 vistos.add(u)
+                vistos.add(u_dedup)
                 vistos.add(directa["url"])
                 resultados.append(directa)
             else:
@@ -1351,15 +1378,38 @@ def buscar_producto(producto, pais_default, config):
 
                     url = canonicalizar_url(raw_url)
                     domain = urlparse(url).netloc.lower().removeprefix("www.")
+                    dedup_key = clave_deduplicacion_url(url)
 
                     # Descartar buscadores, redes publicitarias (ej. bing.com/aclick) y URLs ya vistas
-                    if any(ign in domain for ign in DOMINIOS_IGNORADOS) or url in vistos or raw_url in vistos:
+                    if (
+                        any(ign in domain for ign in DOMINIOS_IGNORADOS)
+                        or url in vistos
+                        or raw_url in vistos
+                        or dedup_key in vistos
+                    ):
                         continue
 
-                    # 🛡️ CORRECCIÓN CLAVE: Ignorar páginas de búsqueda de Amazon (/s?).
-                    # Solo permitimos pasar a páginas de producto reales (que contienen /dp/)
-                    if "amazon." in url.lower() and "/s?" in url.lower():
-                        continue
+                    # 🛡️ FILTRO ESTRICTO DE PÁGINAS DE PRODUCTO VS BÚSQUEDAS/CATEGORÍAS:
+                    # A) En Amazon, SOLO permitir URLs de producto individual (/dp/ o /gp/product/).
+                    #    Ignorar páginas de búsqueda (/s, /s?, /brand/s), listas y categorías que provocan CAPTCHAs.
+                    if "amazon." in domain:
+                        if not ("/dp/" in url.lower() or "/gp/product/" in url.lower()):
+                            continue
+
+                    # B) En Wallapop, SOLO permitir artículos individuales (/item/)
+                    if "wallapop.com" in domain:
+                        if "/item/" not in url.lower():
+                            continue
+
+                    # C) En Vinted, SOLO permitir artículos individuales (/items/)
+                    if "vinted." in domain:
+                        if "/items/" not in url.lower():
+                            continue
+
+                    # D) En eBay, SOLO permitir artículos individuales (/itm/)
+                    if "ebay." in domain:
+                        if "/itm/" not in url.lower():
+                            continue
 
                     titulo = res.get("title", "")
                     descripcion = res.get("body", "")
@@ -1387,19 +1437,52 @@ def buscar_producto(producto, pais_default, config):
                                     resultados.append(directa)
                                     vistos.add(url)
                                     vistos.add(raw_url)
+                                    vistos.add(dedup_key)
                                     vistos.add(directa["url"])
                                 else:
                                     print(f"   ⏭️ Descartado por filtros/precio: {directa['precio']:.2f} € en {directa['tienda']}")
                                     vistos.add(url)
                                     vistos.add(raw_url)
+                                    vistos.add(dedup_key)
                             else:
                                 # Si la visita directa falla o no tiene precio, no nos fiamos del snippet
                                 vistos.add(url)
                                 vistos.add(raw_url)
+                                vistos.add(dedup_key)
                         continue
 
-                    # TIENDA BLOQUEADA EN CENTRO DE DATOS (Amazon, Wallapop, Vinted)
-                    # En estas tiendas no podemos visitar directamente desde Azure, extraemos del snippet de DDG
+                    # COMPROBAR SI ES UN MARKETPLACE DE SEGUNDA MANO (C2C: Wallapop, Vinted, eBay, Milanuncios)
+                    es_c2c = any(c in domain for c in ["wallapop", "vinted", "ebay", "milanuncios"])
+
+                    if es_c2c:
+                        # EN ANUNCIOS DE SEGUNDA MANO NUNCA NOS FIAMOS DEL SNIPPET DE DDG:
+                        # Los anuncios se venden en horas o se borran (HTTP 404), mientras los buscadores
+                        # mantienen la información vieja en caché durante semanas.
+                        # Exigimos SIEMPRE confirmación en directo:
+                        print(f"   🔍 Verificando disponibilidad en directo de anuncio C2C en {domain}: {url}")
+                        directa = consultar_url_directa(url, producto, config)
+                        if directa:
+                            if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
+                                resultados.append(directa)
+                                vistos.add(url)
+                                vistos.add(raw_url)
+                                vistos.add(dedup_key)
+                                vistos.add(directa["url"])
+                            else:
+                                print(f"   ⏭️ Descartado por filtros/precio: {directa['precio']:.2f} € en {directa['tienda']}")
+                                vistos.add(url)
+                                vistos.add(raw_url)
+                                vistos.add(dedup_key)
+                        else:
+                            # Si da 404, vendido, reservado o no se puede verificar: descartar sin enviar falsa alarma
+                            vistos.add(url)
+                            vistos.add(raw_url)
+                            vistos.add(dedup_key)
+                        continue
+
+                    # TIENDA RETAIL BLOQUEADA EN CENTRO DE DATOS (ej. Amazon en GitHub Actions)
+                    # En tiendas oficiales/retail donde los productos no son de segunda mano únicos,
+                    # se extrae el precio del snippet de DDG como recurso de contingencia.
                     precio = extraer_precio(texto)
                     if precio is None:
                         continue
@@ -1409,6 +1492,7 @@ def buscar_producto(producto, pais_default, config):
 
                     vistos.add(url)
                     vistos.add(raw_url)
+                    vistos.add(dedup_key)
                     tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
                     envio = extraer_envio(texto)
 

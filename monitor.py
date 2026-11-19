@@ -114,6 +114,7 @@ def cargar_configuracion():
         
     config.setdefault("pais", "España")
     config.setdefault("moneda", "EUR")
+    config.setdefault("tasa_pln_eur", 0.235)  # 1 PLN ≈ 0.235 EUR (Polonia / UE)
     config.setdefault("incluir_wallapop_vinted", True)
     config.setdefault("ignorar_vendidos", True) # Nueva clave explícita
     config.setdefault("envio_wallapop_vinted_estimado", 4.50)
@@ -167,12 +168,14 @@ def guardar_estado(estado):
 # EXTRACCION Y PARSEO DE NUMEROS, PRECIOS Y ENVIOS
 # ============================================================
 
+TASA_PLN_A_EUR = 0.235  # Tipo de cambio medio aproximado 1 PLN ≈ 0.235 EUR (1 EUR ≈ 4.25 PLN)
+
 def convertir_numero(texto):
     if isinstance(texto, (int, float)):
         return float(texto)
     texto = str(texto).replace("\u00a0", " ").replace("&nbsp;", " ")
     # Extraer el primer bloque numérico limpio (soporta 1.234,56 o 1234.56 o 179)
-    m = re.search(r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?|\d+(?:[.,]\d+)?)", texto)
+    m = re.search(r"(\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d+)?)", texto)
     if not m:
         raise ValueError(f"No se encontró un número válido en: {texto}")
     num_str = m.group(1).strip()
@@ -272,6 +275,9 @@ def extraer_precio(texto):
                         val = offers.get("price") or offers.get("lowPrice")
                         if val is not None:
                             precio_ld = convertir_numero(val)
+                            curr = str(offers.get("priceCurrency", "")).upper()
+                            if curr == "PLN":
+                                precio_ld = round(precio_ld * TASA_PLN_A_EUR, 2)
                             if 1 <= precio_ld <= 100000:
                                 return precio_ld
         except Exception:
@@ -411,6 +417,22 @@ def extraer_precio(texto):
                     return precio
             except ValueError:
                 continue
+
+    # 11. PATRONES REGEX PARA POLONIA (PLN / złoty convertido a EUR)
+    patrones_pln = [
+        r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*(?:zł|zl|pln)\b",
+        r"(?:zł|zl|pln)\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)",
+    ]
+    for patron in patrones_pln:
+        for coincidencia in re.finditer(patron, texto_limpio, re.IGNORECASE):
+            try:
+                precio_pln = convertir_numero(coincidencia.group(1))
+                precio_eur = round(precio_pln * TASA_PLN_A_EUR, 2)
+                if 1 <= precio_eur <= 100000:
+                    return precio_eur
+            except ValueError:
+                continue
+
     return None
 
 def extraer_envio(texto):
@@ -423,6 +445,8 @@ def extraer_envio(texto):
         "kostenlose lieferung", "kostenloser versand", "gratis versand", "versandkostenfrei",
         "livraison gratuite", "frais de livraison gratuits", "frais de port gratuits",
         "spedizione gratuita", "consegna gratuita",
+        "gratis verzending", "kosteloze verzending", "gratis levering",
+        "darmowa dostawa", "bezpłatna dostawa", "wysyłka gratis", "dostawa gratis",
     ]
     for termino in terminos_gratis:
         if termino in texto_lower:
@@ -588,10 +612,26 @@ def es_tienda_ue(url):
     if tld in PAISES_UE_TLD:
         return True
     tiendas_ue_conocidas = [
+        # Amazon y marketplaces paneuropeos
         "amazon.es", "amazon.de", "amazon.fr", "amazon.it", "amazon.nl", "amazon.com.be",
-        "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
-        "geizhals", "alternate", "caseking", "mindfactory", "ldlc", "mediamarkt",
-        "wallapop", "vinted", "informaticabarata", "shopdutyfree"
+        "wallapop", "vinted",
+        # Comparadores de precios europeos
+        "hoteudeals", "geizhals", "idealo", "guenstiger", "cenypc", "tagdip", "priceinfo",
+        # España
+        "pccomponentes", "mediamarkt", "coolmod", "neobyte", "aussar", "senetic", "europeanpc",
+        "informaticabarata", "shopdutyfree",
+        # Alemania
+        "alternate", "caseking", "mindfactory", "playox", "office-partner", "galaxus",
+        # Bélgica
+        "joybuy",
+        # Países Bajos / Holanda
+        "megekko", "yorcom",
+        # Polonia
+        "allegro", "proline", "komputronik",
+        # Italia
+        "soloperaffare",
+        # Francia
+        "ldlc"
     ]
     if any(t in domain for t in tiendas_ue_conocidas):
         return True
@@ -600,10 +640,14 @@ def es_tienda_ue(url):
 
 def detectar_tienda_y_pais(url):
     domain = urlparse(url).netloc.lower().removeprefix("www.")
+
+    # Marketplaces C2C
     if "wallapop" in domain:
         return "Wallapop", "🇪🇸 Wallapop (2ª mano)", False
     if "vinted" in domain:
         return "Vinted", "🇪🇺 Vinted (2ª mano)", True
+
+    # Amazon por país
     if "amazon.es" in domain:
         return "Amazon España", "🇪🇸 España", False
     if "amazon.de" in domain:
@@ -616,6 +660,70 @@ def detectar_tienda_y_pais(url):
         return "Amazon Países Bajos", "🇳🇱 Países Bajos", True
     if "amazon.com.be" in domain or "amazon.be" in domain:
         return "Amazon Bélgica", "🇧🇪 Bélgica", True
+
+    # Comparadores de precios europeos
+    if "hoteudeals" in domain:
+        return "HotEUDeals", "🇪🇺 HotEUDeals (Europa)", True
+    if "priceinfo" in domain:
+        return "PriceInfo", "🇪🇺 PriceInfo (Europa)", True
+    if "geizhals" in domain:
+        return "Geizhals (Europa)", "🇪🇺 Europa (UE)", True
+    if "guenstiger" in domain:
+        return "Guenstiger", "🇩🇪 Alemania", True
+    if "cenypc" in domain:
+        return "CenyPC", "🇵🇱 Polonia", True
+    if "tagdip" in domain:
+        return "TagDip", "🇵🇱 Polonia", True
+    if "idealo" in domain:
+        if domain.endswith(".de"): return "Idealo Alemania", "🇩🇪 Alemania", True
+        if domain.endswith(".fr"): return "Idealo Francia", "🇫🇷 Francia", True
+        if domain.endswith(".it"): return "Idealo Italia", "🇮🇹 Italia", True
+        return "Idealo", "🇪🇺 Europa (UE)", True
+
+    # Tiendas Alemania
+    if "mindfactory" in domain:
+        return "Mindfactory", "🇩🇪 Alemania", True
+    if "playox" in domain:
+        return "Playox", "🇩🇪 Alemania", True
+    if "office-partner" in domain:
+        return "Office Partner", "🇩🇪 Alemania", True
+    if "galaxus" in domain:
+        if domain.endswith(".de"): return "Galaxus Alemania", "🇩🇪 Alemania", True
+        return "Galaxus", "🇩🇪 Alemania", True
+    if "caseking" in domain:
+        return "Caseking", "🇩🇪 Alemania", True
+    if "alternate" in domain:
+        if domain.endswith(".de"): return "Alternate Alemania", "🇩🇪 Alemania", True
+        if domain.endswith(".be"): return "Alternate Bélgica", "🇧🇪 Bélgica", True
+        return "Alternate", "🇪🇸 España", False
+
+    # Tiendas Bélgica
+    if "joybuy" in domain:
+        return "Joybuy", "🇧🇪 Bélgica", True
+
+    # Tiendas Países Bajos / Holanda
+    if "megekko" in domain:
+        return "Megekko", "🇳🇱 Países Bajos", True
+    if "yorcom" in domain:
+        return "Yorcom", "🇳🇱 Países Bajos", True
+
+    # Tiendas Polonia
+    if "allegro" in domain:
+        return "Allegro", "🇵🇱 Polonia", True
+    if "proline" in domain:
+        return "Proline", "🇵🇱 Polonia", True
+    if "komputronik" in domain:
+        return "Komputronik", "🇵🇱 Polonia", True
+
+    # Tiendas Italia
+    if "soloperaffare" in domain:
+        return "SoloPerAffare", "🇮🇹 Italia", True
+
+    # Tiendas Francia
+    if "ldlc" in domain:
+        return "LDLC", "🇫🇷 Francia", True
+
+    # Tiendas España
     if "mediamarkt" in domain:
         if domain.endswith(".de"): return "MediaMarkt Alemania", "🇩🇪 Alemania", True
         return "MediaMarkt", "🇪🇸 España", False
@@ -626,30 +734,33 @@ def detectar_tienda_y_pais(url):
         return "Informática Barata", "🇪🇸 España", False
     if "shopdutyfree" in domain:
         return "Shop Duty Free", "🇪🇸 España", False
+    if "europeanpc" in domain:
+        return "EuropeanPC", "🇪🇸 España", False
+    if "senetic" in domain:
+        return "Senetic", "🇪🇸 España", False
+    if "coolmod" in domain:
+        return "Coolmod", "🇪🇸 España", False
+    if "neobyte" in domain:
+        return "Neobyte", "🇪🇸 España", False
+    if "aussar" in domain:
+        return "Aussar", "🇪🇸 España", False
+
+    # Fuera de la UE (UK / US)
     if domain.endswith((".co.uk", ".uk")) or "amazon.co.uk" in domain:
         return domain, "🇬🇧 Reino Unido (Fuera UE)", True
-    if domain.endswith(".es") or any(t in domain for t in ["pccomponentes", "coolmod", "neobyte", "aussar", "senetic", "informaticabarata", "shopdutyfree"]):
+
+    # Fallback por TLD
+    if domain.endswith(".es") or any(t in domain for t in ["pccomponentes", "coolmod", "neobyte", "aussar", "senetic", "informaticabarata", "shopdutyfree", "europeanpc"]):
         return domain, "🇪🇸 España", False
-    if "geizhals" in domain:
-        return "Geizhals (Europa)", "🇪🇺 Europa (UE)", True
-    if "idealo" in domain:
-        if domain.endswith(".de"): return "Idealo Alemania", "🇩🇪 Alemania", True
-        if domain.endswith(".fr"): return "Idealo Francia", "🇫🇷 Francia", True
-        if domain.endswith(".it"): return "Idealo Italia", "🇮🇹 Italia", True
-        return "Idealo", "🇪🇺 Europa (UE)", True
-    if "alternate" in domain:
-        if domain.endswith(".de"): return "Alternate Alemania", "🇩🇪 Alemania", True
-        return "Alternate", "🇪🇸 España", False
-    if "caseking" in domain:
-        return "Caseking", "🇩🇪 Alemania", True
-    if "ldlc" in domain:
-        return "LDLC", "🇫🇷 Francia", True
     if domain.endswith(".de"): return domain, "🇩🇪 Alemania", True
-    if domain.endswith(".fr"): return domain, "🇫🇷 Francia", True
-    if domain.endswith(".it"): return domain, "🇮🇹 Italia", True
+    if domain.endswith(".pl"): return domain, "🇵🇱 Polonia", True
     if domain.endswith(".nl"): return domain, "🇳🇱 Países Bajos", True
+    if domain.endswith(".be"): return domain, "🇧🇪 Bélgica", True
+    if domain.endswith(".it"): return domain, "🇮🇹 Italia", True
+    if domain.endswith(".fr"): return domain, "🇫🇷 Francia", True
     if domain.endswith(".at"): return domain, "🇦🇹 Austria", True
     if domain.endswith(".pt"): return domain, "🇵🇹 Portugal", True
+    if domain.endswith(".eu"): return domain, "🇪🇺 Europa (UE)", True
     return domain, "🇪🇺 Europa (UE)", True
 
 
@@ -1125,27 +1236,34 @@ def generar_consultas(producto, config):
         termino = busqueda
         termino_c2c = busqueda
 
-    # 1. BÚSQUEDA AGRUPADA EUROPA: Forzamos la inclusión de divisa para que el snippet de DDG traiga el precio
+    # 1. COMPARADORES EUROPEOS Y AMAZON UE (Donde se agregan ofertas de toda la UE)
     if buscar_europa:
         consultas.append((
-            f'"{termino}" (site:amazon.es OR site:amazon.de OR site:amazon.it OR site:pccomponentes.com OR site:mediamarkt.es OR site:geizhals.de OR site:idealo.es OR site:idealo.de OR site:informaticabarata.com OR site:shopdutyfree.es) ("€" OR "EUR")', 
+            f'"{termino}" (site:hoteudeals.com OR site:geizhals.de OR site:idealo.de OR site:idealo.es OR site:guenstiger.de OR site:priceinfo.eu OR site:cenypc.pl OR site:amazon.de OR site:amazon.it)',
             "es-es"
         ))
-        # 1B. Tiendas especializadas España (búsqueda dedicada para Informática Barata y Shop Duty Free)
+
+        # 2. GRANDES TIENDAS EUROPA (Alemania, Países Bajos, Bélgica, Polonia, Italia)
         consultas.append((
-            f'"{termino}" (site:informaticabarata.com OR site:shopdutyfree.es)', 
+            f'"{termino}" (site:mindfactory.de OR site:playox.de OR site:galaxus.de OR site:megekko.nl OR site:yorcom.nl OR site:allegro.pl OR site:proline.pl OR site:komputronik.pl OR site:soloperaffare.it)',
+            "es-es"
+        ))
+
+        # 3. TIENDAS ESPAÑA
+        consultas.append((
+            f'"{termino}" (site:amazon.es OR site:pccomponentes.com OR site:mediamarkt.es OR site:informaticabarata.com OR site:shopdutyfree.es OR site:senetic.es OR site:europeanpc.es)',
             "es-es"
         ))
     
-    # 2. MARKETPLACES C2C (Wallapop / Vinted): Exigimos divisa y excluimos vendidos
+    # 4. MARKETPLACES C2C (Wallapop / Vinted): Exigimos divisa y excluimos vendidos
     if config.get("incluir_wallapop_vinted", True):
         consultas.append((
             f'"{termino_c2c}" (site:wallapop.com OR site:vinted.es) -vendido -reservado ("€" OR "EUR")', 
             "es-es"
         ))
     
-    # 3. BÚSQUEDA GENERAL DE PRECIO
-    consultas.append((f'"{termino}" precio oferta ("€" OR "EUR")', "es-es"))
+    # 5. BÚSQUEDA GENERAL DE PRECIO (Europa)
+    consultas.append((f'"{termino}" (precio OR offer OR price OR preis) ("€" OR "EUR" OR "zł")', "es-es"))
 
     # Eliminar duplicados
     vistos = set()

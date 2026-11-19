@@ -5,14 +5,16 @@ import os
 import re
 import sys
 import time
-import random  # <-- ASEGÚRATE DE QUE ESTÉ
+import random
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-import requests
-import urllib3  # <-- AÑADIDO PARA REINTENTOS ROBUSTOS
-from requests.adapters import HTTPAdapter
+# LIBRERÍA CLAVE: Imita perfectamente la huella digital de Chrome
+from curl_cffi import requests as curl_requests
+
+# Mantenemos requests estándar SOLO para enviar mensajes a Telegram
+import requests 
 from ddgs import DDGS
 
 
@@ -762,35 +764,14 @@ def buscar_en_ddgs(buscador, consulta, region):
 
 
 def consultar_url_directa(url, producto, config):
-    session = get_robust_session()
-    
-    # HEADERS ULTRA-REALISTAS DE CHROME 124 EN WINDOWS
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-        "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
-        "Accept-Encoding": "gzip, deflate, br",
-        "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
-        "Sec-Fetch-Dest": "document",
-        "Sec-Fetch-Mode": "navigate",
-        "Sec-Fetch-Site": "none",
-        "Sec-Fetch-User": "?1",
-        "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"',
-        "Cache-Control": "max-age=0",
-        "DNT": "1"
-    }
-    
-    # Forzar cookies de localización española
-    if "amazon.es" in url:
-        session.cookies.set('lc-main', 'es_ES', domain='.amazon.es')
-        session.cookies.set('frc', 'es_ES', domain='.amazon.es')
-        session.cookies.set('ubid-main', '132-0000000-0000000', domain='.amazon.es') # Cookie de sesión falsa pero válida
-    
     try:
-        respuesta = session.get(url, headers=headers, timeout=(5.0, 10.0))
+        # impersonate="chrome124" engaña a los firewalls (Cloudflare/AWS WAF) 
+        # haciéndoles creer que la petición viene de un Chrome real en Windows.
+        respuesta = curl_requests.get(
+            url,
+            impersonate="chrome124",
+            timeout=(5.0, 10.0)
+        )
         
         if respuesta.status_code != 200:
             print(f"   🚫 Error HTTP {respuesta.status_code} en {urlparse(url).netloc}")
@@ -798,33 +779,37 @@ def consultar_url_directa(url, producto, config):
             
         texto = respuesta.text
         
-        # DIAGNÓSTICO: Si no encontramos precio, imprimimos qué nos devolvió Amazon
-        precio = extraer_precio(texto)
-        if not precio:
-            # Limpiamos saltos de línea para que se vea en una sola línea en la consola
-            debug_text = texto[:400].replace('\n', ' ').replace('\r', ' ')
-            print(f"   🔍 DEBUG: Amazon devolvió esto en lugar del precio: '{debug_text}...'")
-            
-            # Comprobación explícita de CAPTCHA
-            if "captcha" in texto.lower() or "enter the characters" in texto.lower() or "robot" in texto.lower():
-                print("   🚨 CONFIRMADO: Amazon ha detectado el script y muestra un CAPTCHA. requests no puede superar esto.")
-            
+        # Diagnóstico de seguridad (por si acaso algún sitio es extremadamente estricto)
+        if "captcha" in texto.lower() or "robot" in texto.lower() or "enter the characters" in texto.lower():
+            print(f"   🚨 Bloqueo de seguridad detectado en {urlparse(url).netloc}")
             return None
-            
-        # Filtros de agotado/vendido (se mantienen)
+
+        # Comprobación de stock en Amazon
         if "amazon." in url.lower():
             if re.search(r'(?:currently unavailable|temporarily out of stock|no disponible|agotado|sin stock)', texto, re.IGNORECASE):
+                # Si está agotado, pero aún así tiene precio en el JSON, lo respetamos (a veces pasa en preventas)
                 if not re.search(r'"priceToPay":\s*\{[^}]*"amount"', texto):
                     print(f"   ⏭️ Descartado: Producto agotado/sin stock en Amazon: {urlparse(url).netloc}")
                     return None
 
+        # Filtro de disponibilidad para Wallapop y Vinted
         if "wallapop" in url.lower() or "vinted" in url.lower():
             titulo_pagina = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
             if titulo_pagina:
                 titulo = titulo_pagina.group(1).lower()
                 if any(p in titulo for p in ["vendido", "reservado", "sold", "vendu", "verkauft", "no disponible"]):
+                    print(f"   ⏭️ Descartado (Vendido/Reservado en título): {url}")
                     return None
+            
+            if re.search(r'(?:estado|statut|status).*?:.*?(?:vendido|sold|verkauft|vendu|reservado|réservé)', texto, re.IGNORECASE):
+                print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
+                return None
 
+        precio = extraer_precio(texto)
+        if not precio:
+            print(f"   ⚠️ No se pudo extraer el precio del HTML: {urlparse(url).netloc}")
+            return None
+            
         tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
         envio = extraer_envio(texto)
         
@@ -847,7 +832,7 @@ def consultar_url_directa(url, producto, config):
     except Exception as e:
         print(f"   ⚠️ Error inesperado en {url}: {e}")
         return None
-                        
+                                
 def buscar_producto(producto, pais_default, config):
     consultas = generar_consultas(producto, config)
     resultados = []

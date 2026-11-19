@@ -1,0 +1,52 @@
+version: "3.8"
+
+services:
+  price-monitor:
+    # Imagen oficial precompilada en GitHub Packages (multi-arquitectura: amd64 / arm64)
+    image: ghcr.io/antonio-bravo/telegram-price:latest
+    
+    # Descomenta 'build' si prefieres compilar la imagen localmente en tu NAS:
+    # build:
+    #   context: ..
+    #   dockerfile: docker/Dockerfile
+
+    container_name: price-monitor
+    restart: unless-stopped
+
+    environment:
+      # ============================================================
+      # CREDENCIALES DE TELEGRAM (Inyecta aquí tus valores directamente)
+      # ============================================================
+      - TELEGRAM_BOT_TOKEN=TU_BOT_TOKEN_AQUI
+      - TELEGRAM_CHAT_ID=TU_CHAT_ID_AQUI
+
+      # ============================================================
+      # PARÁMETROS DEL MONITOR
+      # ============================================================
+      # Intervalo en minutos entre cada búsqueda (ejemplo: 30, 60, 120)
+      - CHECK_INTERVAL_MINUTES=60
+
+      # Realizar una comprobación inmediata al arrancar el contenedor
+      - RUN_ON_STARTUP=true
+
+      # Modo Residencial: al ejecutarse en tu NAS con IP doméstica, permite consultar
+      # tiendas como Amazon, Wallapop y Vinted directamente sin bloqueos de IP
+      - MODO_RESIDENCIAL=true
+
+      # Zona horaria para las fechas y horas del registro
+      - TZ=Europe/Madrid
+      - PYTHONUNBUFFERED=1
+
+    volumes:
+      # ============================================================
+      # PERSISTENCIA DE DATOS
+      # ============================================================
+      # Mapea los archivos del host dentro del contenedor.
+      # Asegúrate de que config.json esté en la misma carpeta que este docker-compose.yml
+      - ./config.json:/app/config.json
+      - ./monitor_state.json:/app/monitor_state.json
+      - ./historico.csv:/app/historico.csv
+
+      # NOTA ALTERNATIVA: Si prefieres mapear una carpeta completa 'data', usa:
+      # - ./data:/app/data
+      # y añade en environment: - DATA_DIR=/app/data

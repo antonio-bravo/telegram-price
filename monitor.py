@@ -30,9 +30,10 @@ from ddgs import DDGS
 
 BASE_DIR = Path(__file__).resolve().parent
 
-CONFIG_FILE = BASE_DIR / "config.json"
-STATE_FILE = BASE_DIR / "monitor_state.json"
-HISTORY_FILE = BASE_DIR / "historico.csv"
+DATA_DIR = Path(os.getenv("DATA_DIR", BASE_DIR))
+CONFIG_FILE = Path(os.getenv("CONFIG_PATH", os.getenv("CONFIG_FILE", DATA_DIR / "config.json")))
+STATE_FILE = Path(os.getenv("STATE_PATH", os.getenv("STATE_FILE", DATA_DIR / "monitor_state.json")))
+HISTORY_FILE = Path(os.getenv("HISTORY_PATH", os.getenv("HISTORY_FILE", DATA_DIR / "historico.csv")))
 
 TERMINOS_EXCLUSION_DEFECTO = [
     "reacondicionado", "refurbished", "recertified",
@@ -143,6 +144,7 @@ def cargar_estado():
 
 
 def guardar_estado(estado):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     temporal = STATE_FILE.with_suffix(".tmp")
     with open(temporal, "w", encoding="utf-8") as f:
         json.dump(estado, f, indent=2, ensure_ascii=False)
@@ -179,35 +181,111 @@ def extraer_precio(texto):
     # Desescapar entidades HTML (como &nbsp;, &#8364;, etc.)
     texto_unescaped = html.unescape(texto)
 
-    # 1. ELIMINAR FALSOS POSITIVOS DE FILTROS LATERALES
+    # Monedas permitidas al final de expresiones: € o eur o euros
+    moneda = r"(?:€|eur(?:os)?)"
+
+    # 1. ELIMINAR FALSOS POSITIVOS DE FILTROS LATERALES Y RANGOS
     texto_limpio = re.sub(
-        r'(?:under|moins de|sous|menos de|unter|less than|sotto|gifts under|regalos por debajo de|cadeaux de moins de)\s+\d+(?:[.,]\d+)?\s*(?:€|eur|euros?)', 
-        '', 
+        rf"\b(?:under|moins de|sous|menos de|unter|less than|sotto|gifts under|regalos por debajo de|cadeaux de moins de)\s+\d+(?:[.,]\d+)?\s*{moneda}(?!\w)", 
+        "", 
         texto_unescaped, 
         flags=re.IGNORECASE
     )
 
-    # 2. Schema.org JSON-LD (Amazon y tiendas europeas estándar)
-    # Busca bloques <script type="application/ld+json"> que contengan "price"
-    for m in re.finditer(r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>', texto_limpio, re.DOTALL | re.IGNORECASE):
+    # 2. ELIMINAR CUOTAS Y PRECIOS DE FINANCIACIÓN POR MES (ej. "21,60 €/mes", "cuotas de 15 €")
+    texto_limpio = re.sub(
+        rf"\b(?:desde\s+)?\d+(?:[.,]\d+)?\s*{moneda}?\s*(?:/|\s*al\s*|\s*por\s*|\s*cada\s*)?(?:mes|m|month|monat)\b",
+        "",
+        texto_limpio,
+        flags=re.IGNORECASE
+    )
+    texto_limpio = re.sub(
+        rf"\b\d+\s*(?:cuotas?|plazos?|meses)\s*(?:de)?\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)",
+        "",
+        texto_limpio,
+        flags=re.IGNORECASE
+    )
+    texto_limpio = re.sub(
+        rf"\b(?:cuota|plazo|financiaci[oó]n)(?:\s+desde)?\s*:\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)",
+        "",
+        texto_limpio,
+        flags=re.IGNORECASE
+    )
+
+    # 3. ELIMINAR AHORROS Y DESCUENTOS (ej. "ahorra 216 €", "descuento de 50 €")
+    texto_limpio = re.sub(
+        rf"\b(?:ahorra|ahorro|descuento|rebaja|save|rabatt|remise|économisez)\s*(?:de|hasta|up to|jusqu'à)?\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)",
+        "",
+        texto_limpio,
+        flags=re.IGNORECASE
+    )
+    texto_limpio = re.sub(
+        rf"\b\d+(?:[.,]\d+)?\s*{moneda}\s*(?:de\s+)?(?:descuento|ahorro|rebaja|de remise)\b",
+        "",
+        texto_limpio,
+        flags=re.IGNORECASE
+    )
+
+    # 4. ELIMINAR PRECIOS TACHADOS / ANTERIORES (ej. "Antes: 520,00 €", "PVP: 450 €")
+    texto_limpio = re.sub(
+        rf"\b(?:antes|pvp|precio anterior|precio recomendado|was|statt|au lieu de)\s*:\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)",
+        "",
+        texto_limpio,
+        flags=re.IGNORECASE
+    )
+
+    # 5. Schema.org JSON-LD (Amazon, MediaMarkt y tiendas europeas estándar)
+    for m in re.finditer(r'<script[^>]*type=[\'"]application/ld\+json[\'"][^>]*>(.*?)</script>', texto_limpio, re.DOTALL | re.IGNORECASE):
         try:
             datos_ld = json.loads(m.group(1))
-            bloques = datos_ld if isinstance(datos_ld, list) else [datos_ld]
+            bloques = []
+            if isinstance(datos_ld, list):
+                bloques.extend(datos_ld)
+            elif isinstance(datos_ld, dict):
+                if "@graph" in datos_ld and isinstance(datos_ld["@graph"], list):
+                    bloques.extend(datos_ld["@graph"])
+                else:
+                    bloques.append(datos_ld)
             for b in bloques:
+                if not isinstance(b, dict):
+                    continue
                 offers = b.get("offers")
                 if offers:
                     if isinstance(offers, list) and offers:
                         offers = offers[0]
-                    if isinstance(offers, dict) and "price" in offers:
-                        precio_ld = convertir_numero(offers["price"])
-                        if 1 <= precio_ld <= 100000:
-                            return precio_ld
+                    if isinstance(offers, dict):
+                        avail = str(offers.get("availability", "")).lower()
+                        if any(s in avail for s in ["outofstock", "soldout", "discontinued"]):
+                            return None
+                        val = offers.get("price") or offers.get("lowPrice")
+                        if val is not None:
+                            precio_ld = convertir_numero(val)
+                            if 1 <= precio_ld <= 100000:
+                                return precio_ld
         except Exception:
             pass
 
-    # 3. SELECTORES HTML ESPECÍFICOS DE AMAZON
+    # 6. Meta tags OpenGraph / Twitter / Product (ej. <meta property="og:price:amount" content="422.50">)
+    m_meta = re.search(
+        r'<meta[^>]+(?:property|name)=[\'"][^\'"]*(?:price:amount|data1|price)[\'"][^>]+content=[\'"]([^\'"]+)[\'"]',
+        texto_limpio,
+        re.IGNORECASE
+    ) or re.search(
+        r'<meta[^>]+content=[\'"]([^\'"]+)[\'"][^>]+(?:property|name)=[\'"][^\'"]*(?:price:amount|data1|price)[\'"]',
+        texto_limpio,
+        re.IGNORECASE
+    )
+    if m_meta:
+        try:
+            p = convertir_numero(m_meta.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    # 7. SELECTORES HTML ESPECÍFICOS DE AMAZON
     # A) <span class="a-offscreen">179,00 €</span>
-    for m in re.finditer(r'<span[^>]*class="[^"]*a-offscreen[^"]*"[^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE):
+    for m in re.finditer(r'<span[^>]*class=[\'"][^\'"]*a-offscreen[^\'"]*[\'"][^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE):
         try:
             p = convertir_numero(m.group(1))
             if 1 <= p <= 100000:
@@ -217,7 +295,7 @@ def extraer_precio(texto):
 
     # B) <span class="a-price-whole">179<span class="a-price-decimal">,</span></span><span class="a-price-fraction">00</span>
     m_whole = re.search(
-        r'<span[^>]*class="[^"]*a-price-whole[^"]*"[^>]*>([\d.,]+)[^<]*(?:<span[^>]*>[^<]*</span>)?</span>\s*<span[^>]*class="[^"]*a-price-fraction[^"]*"[^>]*>(\d{2})</span>',
+        r'<span[^>]*class=[\'"][^\'"]*a-price-whole[^\'"]*[\'"][^>]*>([\d.,]+)[^<]*(?:<span[^>]*>[^<]*</span>)?</span>\s*<span[^>]*class=[\'"][^\'"]*a-price-fraction[^\'"]*[\'"][^>]*>(\d{2})</span>',
         texto_limpio,
         re.IGNORECASE
     )
@@ -231,26 +309,21 @@ def extraer_precio(texto):
         except ValueError:
             pass
 
-    # C) Meta tags OpenGraph / Twitter (ej. <meta property="og:price:amount" content="179.00">)
-    m_meta = re.search(
-        r'<meta[^>]+(?:property|name)="[^"]*(?:price:amount|data1)"[^>]+content="([^"]+)"',
-        texto_limpio,
-        re.IGNORECASE
-    )
-    if m_meta:
+    # 8. MediaMarkt selector branded-price
+    m_mm = re.search(r'<span[^>]*data-test=[\'"]branded-price[\'"][^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE)
+    if m_mm:
         try:
-            p = convertir_numero(m_meta.group(1))
+            p = convertir_numero(m_mm.group(1))
             if 1 <= p <= 100000:
                 return p
         except ValueError:
             pass
 
-    # 4. JSON INTERNO DE AMAZON (priceToPay, buyingPrice, priceAmount)
-    # Ejemplo: "priceToPay":{"amount":179.00,"currency":"EUR"} o con comillas "179.00"
+    # 9. JSON INTERNO (Amazon / MediaMarkt / e-commerce)
     json_price = re.search(
-        r'"(?:priceToPay|buyingPrice|priceAmount)"\s*:\s*\{[^}]*"amount"\s*:\s*"?([\d.,]+)"?',
+        r'[\'"](?:priceToPay|buyingPrice|priceAmount|currentPrice|salesPrice)[\'"]\s*:\s*\{?[^}]*?[\'"]?(?:amount|value)?[\'"]?\s*:\s*[\'"]?([\d.,]+)[\'"]?',
         texto_limpio,
-        re.IGNORECASE | re.DOTALL
+        re.IGNORECASE
     )
     if json_price:
         try:
@@ -269,7 +342,19 @@ def extraer_precio(texto):
         except ValueError:
             pass
 
-    # 5. PATRONES REGEX GENERALES (para resúmenes DDG y texto plano)
+    # 9B. JSON Next.js __NEXT_DATA__ (Wallapop, Vinted y tiendas SPA)
+    m_next = re.search(r"""<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>""", texto_limpio, re.DOTALL | re.IGNORECASE)
+    if m_next:
+        m_cash = re.search(r"""["'](?:cash|price)["']\s*:\s*\{?[^}]*?["']amount["']\s*:\s*([\d.]+)""", m_next.group(1))
+        if m_cash:
+            try:
+                p = float(m_cash.group(1))
+                if 1 <= p <= 100000:
+                    return p
+            except ValueError:
+                pass
+
+    # 10. PATRONES REGEX GENERALES (para resúmenes DDG y texto plano)
     patrones = [
         r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*€",
         r"€\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)",
@@ -361,6 +446,28 @@ DOMINIOS_FUERA_UE = (
 )
 
 
+def es_entorno_datacenter():
+    """
+    Determina si la ejecución actual es en centro de datos (GitHub Actions / Azure / CI)
+    o en entorno residencial / local (NAS o equipo propio con IP doméstica).
+    """
+    modo_res = os.getenv("MODO_RESIDENCIAL", "").strip().lower()
+    if modo_res in ["true", "1", "si", "yes"]:
+        return False
+    if modo_res in ["false", "0", "no"]:
+        return True
+    return (os.getenv("GITHUB_ACTIONS") == "true") or (os.getenv("CI") == "true")
+
+
+def es_tienda_bloqueada_en_datacenter(domain):
+    """
+    Tiendas con Cloudflare/WAF agresivos que bloquean rangos de IP de centros de datos (Azure, AWS).
+    En modo datacenter no se intentan visitar directamente para evitar errores 403 o CAPTCHAs.
+    """
+    dominios_bloqueados = ("amazon.", "wallapop.", "vinted.")
+    return any(d in domain for d in dominios_bloqueados)
+
+
 def es_tienda_ue(url):
     domain = urlparse(url).netloc.lower().removeprefix("www.")
     if domain.endswith(DOMINIOS_FUERA_UE) or any(d in domain for d in DOMINIOS_FUERA_UE):
@@ -398,6 +505,12 @@ def detectar_tienda_y_pais(url):
         return "Amazon Países Bajos", "🇳🇱 Países Bajos", True
     if "amazon.com.be" in domain or "amazon.be" in domain:
         return "Amazon Bélgica", "🇧🇪 Bélgica", True
+    if "mediamarkt" in domain:
+        if domain.endswith(".de"): return "MediaMarkt Alemania", "🇩🇪 Alemania", True
+        return "MediaMarkt", "🇪🇸 España", False
+    if "pccomponentes" in domain:
+        if domain.endswith(".pt"): return "PcComponentes Portugal", "🇵🇹 Portugal", True
+        return "PcComponentes", "🇪🇸 España", False
     if domain.endswith((".co.uk", ".uk")) or "amazon.co.uk" in domain:
         return domain, "🇬🇧 Reino Unido (Fuera UE)", True
     if domain.endswith(".es") or any(t in domain for t in ["pccomponentes", "coolmod", "neobyte", "aussar", "senetic"]):
@@ -464,6 +577,20 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
         for termino in descartes_c2c:
             if termino in texto:
                 return False
+
+        # Descartar anuncios con fechas de publicación antiguas (meses o semanas)
+        # En Wallapop y Vinted las ofertas buenas vuelan en horas o pocos días.
+        if config.get("ignorar_vendidos", True):
+            patron_antiguo = re.search(
+                r'\b(?:hace\s+\d+\s+(?:mes(?:es)?|año(?:s)?|sem(?:ana)?s?)|'
+                r'\d+\s+(?:months?|weeks?|years?)\s+ago|'
+                r'il y a\s+\d+\s+(?:mois|semaines?|ans?)|'
+                r'vor\s+\d+\s+(?:monaten?|wochen?|jahren?))\b',
+                texto,
+                re.IGNORECASE
+            )
+            if patron_antiguo:
+                return False
     else:
         exclusiones = (
             producto.get("excluir_terminos")
@@ -488,7 +615,47 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
             if len(token) >= 3 and token.lower() not in texto:
                 return False
 
-    # 4. Comprobar precio mínimo razonable
+    # 4. Comprobar concordancia de capacidad (ej. evitar alertar de 4TB si se busca 8TB)
+    capacidad = producto.get("capacidad")
+    unidad = producto.get("unidad_medida")
+    if capacidad and unidad:
+        cap_str = f"{capacidad}{unidad}".lower()
+        cap_str_space = f"{capacidad} {unidad}".lower()
+        cap_str_dash = f"{capacidad}-{unidad}".lower()
+        
+        cap_fr = f"{capacidad}to" if str(unidad).upper() == "TB" else (f"{capacidad}go" if str(unidad).upper() == "GB" else "")
+        cap_fr_space = f"{capacidad} to" if str(unidad).upper() == "TB" else (f"{capacidad} go" if str(unidad).upper() == "GB" else "")
+        cap_fr_dash = f"{capacidad}-to" if str(unidad).upper() == "TB" else (f"{capacidad}-go" if str(unidad).upper() == "GB" else "")
+
+        busqueda_modelo = str(producto.get("busqueda", "")).lower()
+        modelo_en_texto = bool(busqueda_modelo and len(busqueda_modelo) >= 5 and busqueda_modelo in texto)
+
+        coincide_cap = (
+            cap_str in texto or cap_str_space in texto or cap_str_dash in texto
+            or (cap_fr and (cap_fr in texto or cap_fr_space in texto or cap_fr_dash in texto))
+            or modelo_en_texto
+        )
+        if not coincide_cap:
+            return False
+
+        # Si el título menciona explícitamente otra capacidad distinta y NO la buscada, descartar
+        if str(unidad).upper() == "TB":
+            otras_capacidades = [c for c in [1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24] if c != int(capacidad)]
+            titulo_lower = titulo.lower()
+            tiene_otra_en_titulo = any(
+                f"{c}tb" in titulo_lower or f"{c} tb" in titulo_lower or f"{c}-tb" in titulo_lower or
+                f"{c}to" in titulo_lower or f"{c} to" in titulo_lower or f"{c}-to" in titulo_lower
+                for c in otras_capacidades
+            )
+            tiene_buscada_en_titulo = (
+                cap_str in titulo_lower or cap_str_space in titulo_lower or cap_str_dash in titulo_lower or
+                (cap_fr and (cap_fr in titulo_lower or cap_fr_space in titulo_lower or cap_fr_dash in titulo_lower)) or
+                (busqueda_modelo and busqueda_modelo in titulo_lower)
+            )
+            if tiene_otra_en_titulo and not tiene_buscada_en_titulo:
+                return False
+
+    # 5. Comprobar precio mínimo razonable
     precio_min = producto.get("precio_minimo_unidad")
     if precio_min is None:
         max_u = producto.get("precio_maximo_unidad")
@@ -620,6 +787,7 @@ def evaluar_oferta(producto, costes, precio_medida, config):
 # ============================================================
 
 def guardar_historico(producto, oferta, evaluacion):
+    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     existe = HISTORY_FILE.exists()
     with open(HISTORY_FILE, "a", newline="", encoding="utf-8") as f:
         escritor = csv.DictWriter(f, fieldnames=COLUMNAS_CSV)
@@ -651,7 +819,8 @@ def guardar_historico(producto, oferta, evaluacion):
 # TELEGRAM
 # ============================================================
 
-def obtener_credenciales_telegram():
+def obtener_credenciales_telegram(config=None):
+    # 1. Variables de entorno (Secrets de GitHub o Docker .env)
     token = (
         os.getenv("TELEGRAM_BOT_TOKEN")
         or os.getenv("BOT_TOKEN")
@@ -664,15 +833,39 @@ def obtener_credenciales_telegram():
         or os.getenv("chat_id")
         or os.getenv("telegram_chat_id")
     )
-    return (token.strip() if token else None), (str(chat_id).strip() if chat_id else None)
+
+    # 2. Si no están en variables de entorno, buscar en config.json (ideal para modo residencial / NAS)
+    if not token or not chat_id:
+        if config is None:
+            try:
+                config = cargar_configuracion()
+            except Exception:
+                config = {}
+        if config and isinstance(config, dict):
+            if not token:
+                token = (
+                    config.get("telegram_bot_token")
+                    or config.get("bot_token")
+                    or config.get("TELEGRAM_BOT_TOKEN")
+                    or config.get("BOT_TOKEN")
+                )
+            if not chat_id:
+                chat_id = (
+                    config.get("telegram_chat_id")
+                    or config.get("chat_id")
+                    or config.get("TELEGRAM_CHAT_ID")
+                    or config.get("CHAT_ID")
+                )
+
+    return (str(token).strip() if token else None), (str(chat_id).strip() if chat_id else None)
 
 
-def enviar_telegram(mensaje):
-    token, chat_id = obtener_credenciales_telegram()
+def enviar_telegram(mensaje, config=None):
+    token, chat_id = obtener_credenciales_telegram(config)
     if not token or not chat_id:
         faltantes = []
-        if not token: faltantes.append("TELEGRAM_BOT_TOKEN (o BOT_TOKEN en Secrets)")
-        if not chat_id: faltantes.append("TELEGRAM_CHAT_ID (o CHAT_ID en Variables/Secrets)")
+        if not token: faltantes.append("TELEGRAM_BOT_TOKEN (en variables de entorno o en config.json)")
+        if not chat_id: faltantes.append("TELEGRAM_CHAT_ID (en variables de entorno o en config.json)")
         print(f"  ⚠️ No se puede enviar alerta. Falta: {', '.join(faltantes)}")
         return False
 
@@ -768,7 +961,7 @@ def procesar_oferta(producto, oferta, config, estado):
     if avisar:
         print(f"  🔔 ¡Oferta cumple criterios! Enviando a Telegram: {evaluacion['total_unidad']:.2f} €/unidad ({oferta['tienda_nombre']})...")
         mensaje = crear_mensaje(producto, oferta, evaluacion, es_bajada)
-        if enviar_telegram(mensaje):
+        if enviar_telegram(mensaje, config=config):
             print("  ✅ Notificación de Telegram enviada con éxito.")
             ofertas_guardadas[clave] = {
                 "precio": precio_actual,
@@ -807,7 +1000,7 @@ def generar_consultas(producto, config):
     # 1. BÚSQUEDA AGRUPADA EUROPA: Forzamos la inclusión de divisa para que el snippet de DDG traiga el precio
     if buscar_europa:
         consultas.append((
-            f'"{termino}" (site:amazon.es OR site:amazon.de OR site:amazon.it OR site:pccomponentes.com OR site:geizhals.de OR site:idealo.es OR site:idealo.de) ("€" OR "EUR")', 
+            f'"{termino}" (site:amazon.es OR site:amazon.de OR site:amazon.it OR site:pccomponentes.com OR site:mediamarkt.es OR site:geizhals.de OR site:idealo.es OR site:idealo.de) ("€" OR "EUR")', 
             "es-es"
         ))
     
@@ -849,13 +1042,24 @@ def buscar_en_ddgs(buscador, consulta, region):
 
 def consultar_url_directa(url, producto, config):
     try:
+        cookies = {}
+        if "amazon." in url.lower():
+            cookies = {"lc-main": "es_ES", "i18n-prefs": "EUR"}
+
         # Si curl_cffi está disponible, imita la huella TLS de Chrome
         if curl_requests:
             try:
                 respuesta = curl_requests.get(
                     url,
                     impersonate="chrome124",
-                    timeout=(5.0, 10.0)
+                    headers={
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                        "Accept-Language": "es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7",
+                        "Referer": "https://www.google.com/",
+                    },
+                    cookies=cookies if cookies else None,
+                    allow_redirects=True,
+                    timeout=(8.0, 15.0)
                 )
             except Exception:
                 respuesta = None
@@ -877,7 +1081,7 @@ def consultar_url_directa(url, producto, config):
                     domain = "." + domain
                 session.cookies.set('lc-main', 'es_ES', domain=domain)
                 session.cookies.set('i18n-prefs', 'EUR', domain=domain)
-            respuesta = session.get(url, headers=headers, timeout=(5.0, 10.0))
+            respuesta = session.get(url, headers=headers, allow_redirects=True, timeout=(8.0, 15.0))
         
         if respuesta.status_code != 200:
             if respuesta.status_code in [403, 503]:
@@ -894,20 +1098,46 @@ def consultar_url_directa(url, producto, config):
             print(f"   🚨 Bloqueo con CAPTCHA detectado en {urlparse(url).netloc} (habitual en visitas directas a Amazon desde servidores)")
             return None
 
-        # 2. Filtro de disponibilidad para Wallapop y Vinted
+        # 2. Extraer título real de la página
+        titulo_real = producto["nombre"]
+        m_title = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
+        if m_title:
+            t = html.unescape(m_title.group(1)).strip()
+            t = re.sub(r'\s+', ' ', t)
+            if len(t) > 3:
+                titulo_real = t
+
+        # 3. Filtro de disponibilidad para Wallapop y Vinted
         if "wallapop" in url.lower() or "vinted" in url.lower():
-            titulo_pagina = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
-            if titulo_pagina:
-                titulo = titulo_pagina.group(1).lower()
-                if any(p in titulo for p in ["vendido", "reservado", "sold", "vendu", "verkauft", "no disponible"]):
-                    print(f"   ⏭️ Descartado (Vendido/Reservado en título): {url}")
-                    return None
+            if any(p in titulo_real.lower() for p in ["vendido", "reservado", "sold", "vendu", "verkauft", "no disponible"]):
+                print(f"   ⏭️ Descartado (Vendido/Reservado en título): {url}")
+                return None
             
+            # Comprobar estado en JSON interno de Next.js (__NEXT_DATA__)
+            m_next = re.search(r"""<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>""", texto, re.DOTALL | re.IGNORECASE)
+            if m_next:
+                next_str = m_next.group(1).lower()
+                if re.search(r"""["'](?:sold|is_sold|vendido)["']\s*:\s*true""", next_str) or \
+                   re.search(r"""["'](?:reserved|is_reserved|reservado)["']\s*:\s*true""", next_str) or \
+                   re.search(r"""["']status["']\s*:\s*["'](?:sold|reserved|vendido|reservado|closed)["']""", next_str):
+                    print(f"   ⏭️ Descartado (Vendido/Reservado en datos JSON internos): {url}")
+                    return None
+
+            # Comprobar marcas explícitas en el texto de la página
+            frases_no_disponible = [
+                "este producto ya se ha vendido", "producto vendido", "artículo vendido", "¡vendido!",
+                "ya no está disponible", "artículo no disponible", "cet article a été vendu",
+                "article vendu", "dieser artikel wurde verkauft", "item sold", "no longer available"
+            ]
+            if any(f in texto_lower for f in frases_no_disponible):
+                print(f"   ⏭️ Descartado (Marcador de no disponible en página): {url}")
+                return None
+
             if re.search(r'(?:estado|statut|status).*?:.*?(?:vendido|sold|verkauft|vendu|reservado|réservé)', texto, re.IGNORECASE):
                 print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
                 return None
 
-        # 3. Intentar extraer precio
+        # 4. Intentar extraer precio
         precio = extraer_precio(texto)
         if not precio:
             # Solo si NO hay precio comprobamos si está agotado en Amazon
@@ -933,7 +1163,7 @@ def consultar_url_directa(url, producto, config):
             "precio": precio,
             "envio": envio,
             "url": url,
-            "titulo": producto["nombre"],
+            "titulo": titulo_real,
         }
         
     except Exception as e:
@@ -945,6 +1175,8 @@ def buscar_producto(producto, pais_default, config):
     resultados = []
     vistos = set()
 
+    datacenter = es_entorno_datacenter()
+
     # 1. URLs fijas configuradas en el JSON
     urls_fijas = []
     if producto.get("url"):
@@ -953,13 +1185,21 @@ def buscar_producto(producto, pais_default, config):
         urls_fijas.extend(producto["urls"])
 
     for u in urls_fijas:
+        u_domain = urlparse(u).netloc.lower().removeprefix("www.")
+        if datacenter and es_tienda_bloqueada_en_datacenter(u_domain):
+            print(f"   ℹ️ [Nube] Omitiendo visita directa a URL fija de {u_domain} para evitar bloqueo anti-bot")
+            continue
+
         directa = consultar_url_directa(u, producto, config)
         if directa:
-            vistos.add(directa["url"])
-            resultados.append(directa)
+            if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
+                vistos.add(directa["url"])
+                resultados.append(directa)
+            else:
+                print(f"   ⏭️ Descartado por filtros/precio: {directa['precio']:.2f} € en {directa['tienda']}")
         time.sleep(random.uniform(0.5, 1.5))
 
-    # 2. Búsqueda con DuckDuckGo (para PcComponentes, Wallapop, Vinted, Idealo, etc.)
+    # 2. Búsqueda con DuckDuckGo (para PcComponentes, Wallapop, Vinted, Idealo, MediaMarkt, etc.)
     try:
         with DDGS() as buscador:
             for consulta, region in consultas:
@@ -970,7 +1210,6 @@ def buscar_producto(producto, pais_default, config):
                         continue
 
                     # 🛡️ CORRECCIÓN CLAVE: Ignorar páginas de búsqueda de Amazon (/s?).
-                    # Estas páginas devuelven 503 desde GitHub Actions. 
                     # Solo permitimos pasar a páginas de producto reales (que contienen /dp/)
                     if "amazon." in url.lower() and "/s?" in url.lower():
                         continue
@@ -978,44 +1217,47 @@ def buscar_producto(producto, pais_default, config):
                     titulo = res.get("title", "")
                     descripcion = res.get("body", "")
                     texto = f"{titulo} {descripcion}"
+                    domain = urlparse(url).netloc.lower().removeprefix("www.")
 
-                    # A. Intentamos extraer precio del resumen de DuckDuckGo
-                    precio = extraer_precio(texto)
+                    # COMPROBAR SI ES UNA TIENDA QUE BLOQUEA SERVIDORES
+                    es_bloqueada = datacenter and es_tienda_bloqueada_en_datacenter(domain)
 
-                    # B. LÓGICA DE RESPALDO: Si no hay precio, pero es tienda fiable, visitamos la URL
-                    if precio is None:
-                        # En GitHub Actions (IPs de centro de datos Azure), Amazon, Wallapop y Vinted bloquean
-                        # visitas directas con 403 o CAPTCHA. Para ellos dependemos de que DDG traiga el precio.
-                        # Solo visitamos directamente tiendas de hardware/comparadores que no bloquean centros de datos.
-                        tiendas_fiables = [
-                            "pccomponentes", "coolmod", "neobyte", "aussar", "senetic",
-                            "geizhals", "idealo", "alternate", "caseking", "ldlc"
-                        ]
-                        es_tienda_fiable = any(tienda in url.lower() for tienda in tiendas_fiables)
-                        
+                    if not es_bloqueada:
+                        # TIENDA ACCESIBLE / VERIFICABLE (MediaMarkt, PcComponentes, Idealo, Geizhals, etc.)
+                        # NUNCA nos fiamos ciegamente de un fragmento de búsqueda: visitamos la URL directa para verificar precio real
                         termino_busqueda = producto.get("busqueda", "").lower()
-                        palabras_clave = termino_busqueda.split()[:2] 
-                        coincide_modelo = all(palabra in titulo.lower() for palabra in palabras_clave)
+                        palabras_clave = [p for p in termino_busqueda.split() if len(p) >= 3][:2]
+                        if not palabras_clave:
+                            palabras_clave = [p for p in producto.get("nombre", "").lower().split() if len(p) >= 3][:2]
+                        
+                        texto_para_relevancia = f"{titulo} {url}".lower()
+                        es_relevante = any(p in texto_para_relevancia for p in palabras_clave)
 
-                        if es_tienda_fiable and coincide_modelo:
-                            print(f"   🔍 Precio no visible en resumen DDG, visitando URL directa: {url}")
+                        if es_relevante:
+                            print(f"   🔍 Verificando precio en directo en {domain}: {url}")
                             directa = consultar_url_directa(url, producto, config)
                             if directa:
                                 if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
                                     resultados.append(directa)
                                     vistos.add(url)
                                 else:
-                                    print(f"   ⏭️ Descartado por filtros/precio mínimo: {directa['precio']:.2f} € en {directa['tienda']}")
-                        
-                        continue # Pasamos al siguiente resultado de DDG
+                                    print(f"   ⏭️ Descartado por filtros/precio: {directa['precio']:.2f} € en {directa['tienda']}")
+                            else:
+                                # Si la visita directa falla o no tiene precio, no nos fiamos del snippet
+                                vistos.add(url)
+                        continue
 
-                    # C. Si SÍ había precio en el resumen, seguimos con el flujo normal de validación
+                    # TIENDA BLOQUEADA EN CENTRO DE DATOS (Amazon, Wallapop, Vinted)
+                    # En estas tiendas no podemos visitar directamente desde Azure, extraemos del snippet de DDG
+                    precio = extraer_precio(texto)
+                    if precio is None:
+                        continue
+
                     if not es_resultado_valido(producto, titulo, descripcion, precio, config, url):
                         continue
 
                     vistos.add(url)
                     tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
-                    domain = urlparse(url).netloc.lower().removeprefix("www.")
                     envio = extraer_envio(texto)
 
                     if envio is None and "amazon.es" in domain and precio >= 35.0:
@@ -1067,28 +1309,38 @@ def main():
     print(f"Ámbito de rastreo: {modo_busqueda}")
     print(f"Productos activos a monitorizar: {len(productos_activos)}")
 
-    token, chat_id = obtener_credenciales_telegram()
+    datacenter = es_entorno_datacenter()
+    tipo_red = "Centro de datos (GitHub Actions - Modo protegido)" if datacenter else "Residencial / Local (NAS - Acceso directo completo)"
+    print(f"Entorno de red: {tipo_red}")
+    print(f"Ruta config: {CONFIG_FILE}")
+
+    token, chat_id = obtener_credenciales_telegram(config)
     if token:
         preview = f"{token[:6]}...{token[-4:]}" if len(token) > 10 else "***"
         print(f"🤖 Bot de Telegram: Conectado (Token: {preview})")
     else:
-        print("⚠️ Bot de Telegram: Falta Token (revisa Secret 'TELEGRAM_BOT_TOKEN' o 'BOT_TOKEN')")
+        print("⚠️ Bot de Telegram: Falta Token (en variables de entorno o en config.json)")
 
     if chat_id:
         print(f"💬 Chat de Telegram: Conectado (ID: {chat_id})")
     else:
-        print("⚠️ Chat de Telegram: Falta Chat ID (revisa Variable 'TELEGRAM_CHAT_ID' o 'CHAT_ID')")
+        print("⚠️ Chat de Telegram: Falta Chat ID (en variables de entorno o en config.json)")
 
     for producto in productos_activos:
-        print(f"\n🔎 Buscando: {producto['nombre']} (Modelo: {producto.get('busqueda')})")
-        ofertas = buscar_producto(producto, config.get("pais", "España"), config)
-        print(f"   Resultados válidos encontrados: {len(ofertas)}")
+        try:
+            print(f"\n🔎 Buscando: {producto['nombre']} (Modelo: {producto.get('busqueda')})")
+            ofertas = buscar_producto(producto, config.get("pais", "España"), config)
+            print(f"   Resultados válidos encontrados: {len(ofertas)}")
 
-        for oferta in ofertas:
-            procesar_oferta(producto, oferta, config, estado)
+            for oferta in ofertas:
+                try:
+                    procesar_oferta(producto, oferta, config, estado)
+                except Exception as err_oferta:
+                    print(f"   ⚠️ Error al procesar oferta de {oferta.get('tienda_nombre', 'desconocida')}: {err_oferta}")
 
-        # time.sleep(1.5)
-        time.sleep(random.uniform(3.0, 5.0)) # Pausa prudencial entre productos para no saturar DuckDuckGo desde GitHub Actions
+            time.sleep(random.uniform(3.0, 5.0))
+        except Exception as err_producto:
+            print(f"❌ Error al buscar el producto '{producto.get('nombre', 'desconocido')}': {err_producto}")
 
     # Guardamos el estado solo para recordar qué ofertas ya fueron notificadas
     guardar_estado(estado)

@@ -24,9 +24,21 @@
       "precio": 156.49,
       "ultima_alerta": "2026-11-19T09:47:05.009278+00:00"
     },
-    "8ffb75abd539d1c5be5c19d67035cca802821d34e4d43ba25deb4d61bc61980c": {
-      "precio": 280.49,
-      "ultima_alerta": "2026-11-19T11:26:28.816800+00:00"
+    "77a8c598713fdfd577c26938c2addf90895e17bc621bec34d9321c9fe53e165e": {
+      "precio": 182.57,
+      "ultima_alerta": null
+    },
+    "5db66efa73aefd663d2f853f87777b0d86826c12e924928d3ed9ed533fc73d35": {
+      "precio": 182.57,
+      "ultima_alerta": null
+    },
+    "214ba128cc96b3075429378a8834c0ecef28010b10b361e10569d571501ef073": {
+      "precio": 182.57,
+      "ultima_alerta": null
+    },
+    "5770d0935f3ccf9d715f375e13b6190755f645b819b8fa68154be61aeab55496": {
+      "precio": 158.5,
+      "ultima_alerta": "2026-11-19T11:28:00.497885+00:00"
     }
   }
 }

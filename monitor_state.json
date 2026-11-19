@@ -23,6 +23,10 @@
     "08c739313cf8ff57f01a8de5b6c7c58477df41debe5f3509054fd3dba6e408df": {
       "precio": 156.49,
       "ultima_alerta": "2026-11-19T09:47:05.009278+00:00"
+    },
+    "8ffb75abd539d1c5be5c19d67035cca802821d34e4d43ba25deb4d61bc61980c": {
+      "precio": 280.49,
+      "ultima_alerta": "2026-11-19T11:26:28.816800+00:00"
     }
   }
 }

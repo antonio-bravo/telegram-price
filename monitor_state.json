@@ -9,12 +9,20 @@
       "ultima_alerta": null
     },
     "77aee1dd06465adacfec9c740952141814d761be4d27b35b048c0b40a18ad7f2": {
-      "precio": 502.25,
-      "ultima_alerta": null
+      "precio": 382.99,
+      "ultima_alerta": "2026-11-19T09:46:01.325896+00:00"
     },
     "6ae7b839563dfb8bdfc2e751c4b267f21ee8a7dcadf4ef6f89c7dc3e79c4c6d7": {
       "precio": 204.5,
       "ultima_alerta": "2026-11-19T09:20:40.088003+00:00"
+    },
+    "84eb5cad746c367a2956f9a28498101d3ea75f6bfbbcffac5a33edc33b324ae9": {
+      "precio": 216.0,
+      "ultima_alerta": "2026-11-19T09:46:01.844131+00:00"
+    },
+    "08c739313cf8ff57f01a8de5b6c7c58477df41debe5f3509054fd3dba6e408df": {
+      "precio": 156.49,
+      "ultima_alerta": "2026-11-19T09:47:05.009278+00:00"
     }
   }
 }

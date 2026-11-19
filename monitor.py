@@ -1162,27 +1162,92 @@ def consultar_url_directa(url, producto, config):
             if len(t) > 3:
                 titulo_real = t
 
-        # 3. Filtro de disponibilidad para Wallapop y Vinted
-        if "wallapop" in url.lower() or "vinted" in url.lower():
+        # 3. Filtro de disponibilidad para Marketplaces C2C (Wallapop, Vinted, eBay)
+        precio = None
+        if any(c in url.lower() for c in ["wallapop", "vinted", "ebay"]):
+            # A) Comprobar si el título ya indica vendido o reservado
             if any(p in titulo_real.lower() for p in ["vendido", "reservado", "sold", "vendu", "verkauft", "no disponible"]):
                 print(f"   ⏭️ Descartado (Vendido/Reservado en título): {url}")
                 return None
-            
-            # Comprobar estado en JSON interno de Next.js (__NEXT_DATA__)
-            m_next = re.search(r"""<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>""", texto, re.DOTALL | re.IGNORECASE)
-            if m_next:
-                next_str = m_next.group(1).lower()
-                if re.search(r"""["'](?:sold|is_sold|vendido)["']\s*:\s*true""", next_str) or \
-                   re.search(r"""["'](?:reserved|is_reserved|reservado)["']\s*:\s*true""", next_str) or \
-                   re.search(r"""["']status["']\s*:\s*["'](?:sold|reserved|vendido|reservado|closed)["']""", next_str):
-                    print(f"   ⏭️ Descartado (Vendido/Reservado en datos JSON internos): {url}")
+
+            # B) WALLAPOP: Comprobación exhaustiva en JSON interno (__NEXT_DATA__)
+            if "wallapop" in url.lower():
+                m_next = re.search(r"""<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>""", texto, re.DOTALL | re.IGNORECASE)
+                if m_next:
+                    try:
+                        data = json.loads(m_next.group(1))
+                        page_props = data.get("props", {}).get("pageProps", {})
+                        if page_props.get("statusCode") in [404, 410] or page_props.get("error"):
+                            print(f"   ⏭️ Descartado (Página no encontrada / 404 en Wallapop): {url}")
+                            return None
+                        
+                        item_data = page_props.get("item")
+                        if not item_data and "item" in page_props:
+                            print(f"   ⏭️ Descartado (Artículo eliminado en Wallapop): {url}")
+                            return None
+                            
+                        if isinstance(item_data, dict):
+                            flags = item_data.get("flags", {})
+                            if flags.get("sold") or flags.get("reserved") or flags.get("expired") or flags.get("onHold"):
+                                motivo = "Vendido" if flags.get("sold") else ("Reservado" if flags.get("reserved") else "No disponible/Pausado")
+                                print(f"   ⏭️ Descartado ({motivo} en Wallapop): {url}")
+                                return None
+                            
+                            status = str(item_data.get("status", "")).lower()
+                            if status in ["sold", "reserved", "vendido", "reservado"]:
+                                print(f"   ⏭️ Descartado (Estado '{status}' en Wallapop): {url}")
+                                return None
+
+                            # Obtener precio exacto desde el objeto de Wallapop
+                            price_cash = item_data.get("price", {}).get("cash", {}).get("amount")
+                            if price_cash is not None:
+                                precio = float(price_cash)
+                                
+                            t_orig = item_data.get("title")
+                            if isinstance(t_orig, dict):
+                                t_orig = t_orig.get("original")
+                            if t_orig and len(t_orig) > 3:
+                                titulo_real = t_orig
+                    except Exception:
+                        pass
+
+            # C) VINTED: Comprobación de estado y marcadores
+            if "vinted" in url.lower():
+                m_next = re.search(r"""<script[^>]*id=["']__NEXT_DATA__["'][^>]*>(.*?)</script>""", texto, re.DOTALL | re.IGNORECASE)
+                if m_next:
+                    try:
+                        data = json.loads(m_next.group(1))
+                        item_data = data.get("props", {}).get("pageProps", {}).get("item", {})
+                        if item_data.get("status") in ["sold", "reserved", "closed"] or item_data.get("is_closed"):
+                            print(f"   ⏭️ Descartado (Vendido o cerrado en Vinted): {url}")
+                            return None
+                    except Exception:
+                        pass
+                
+                marcadores_vinted = [
+                    "cet article a été vendu", "artículo vendido", "dieser artikel wurde verkauft",
+                    "item sold", "article vendu", "venduto", "verkauft"
+                ]
+                if any(m in texto_lower for m in marcadores_vinted):
+                    print(f"   ⏭️ Descartado (Marcador de vendido en Vinted): {url}")
                     return None
 
-            # Comprobar marcas explícitas en el texto de la página
+            # D) EBAY: Comprobación de anuncios finalizados o sin existencias
+            if "ebay." in url.lower():
+                marcadores_ebay = [
+                    "este anuncio ha finalizado", "anuncio finalizado", "this listing was ended",
+                    "this listing has ended", "el vendedor ha finalizado este anuncio",
+                    "este artículo no está disponible", "0 disponibles", "0 available",
+                    "dieses angebot wurde beendet", "cette annonce est terminée"
+                ]
+                if any(m in texto_lower for m in marcadores_ebay):
+                    print(f"   ⏭️ Descartado (Anuncio finalizado o agotado en eBay): {url}")
+                    return None
+
+            # E) Marcadores genéricos de no disponible en HTML
             frases_no_disponible = [
                 "este producto ya se ha vendido", "producto vendido", "artículo vendido", "¡vendido!",
-                "ya no está disponible", "artículo no disponible", "cet article a été vendu",
-                "article vendu", "dieser artikel wurde verkauft", "item sold", "no longer available"
+                "ya no está disponible", "artículo no disponible", "item no longer available"
             ]
             if any(f in texto_lower for f in frases_no_disponible):
                 print(f"   ⏭️ Descartado (Marcador de no disponible en página): {url}")
@@ -1192,8 +1257,9 @@ def consultar_url_directa(url, producto, config):
                 print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
                 return None
 
-        # 4. Intentar extraer precio
-        precio = extraer_precio(texto)
+        # 4. Intentar extraer precio si no se obtuvo previamente
+        if precio is None:
+            precio = extraer_precio(texto)
         if not precio:
             # Solo si NO hay precio comprobamos si está agotado en Amazon
             if "amazon." in url.lower() and re.search(r'(?:currently unavailable|temporarily out of stock|no disponible|agotado|sin stock)', texto, re.IGNORECASE):
@@ -1319,8 +1385,35 @@ def buscar_producto(producto, pais_default, config):
                                 vistos.add(raw_url)
                         continue
 
-                    # TIENDA BLOQUEADA EN CENTRO DE DATOS (Amazon, Wallapop, Vinted)
-                    # En estas tiendas no podemos visitar directamente desde Azure, extraemos del snippet de DDG
+                    # COMPROBAR SI ES UN MARKETPLACE DE SEGUNDA MANO (C2C: Wallapop, Vinted, eBay, Milanuncios)
+                    es_c2c = any(c in domain for c in ["wallapop", "vinted", "ebay", "milanuncios"])
+
+                    if es_c2c:
+                        # EN ANUNCIOS DE SEGUNDA MANO NUNCA NOS FIAMOS DEL SNIPPET DE DDG:
+                        # Los anuncios se venden en horas o se borran (HTTP 404), mientras los buscadores
+                        # mantienen la información vieja en caché durante semanas.
+                        # Exigimos SIEMPRE confirmación en directo:
+                        print(f"   🔍 Verificando disponibilidad en directo de anuncio C2C en {domain}: {url}")
+                        directa = consultar_url_directa(url, producto, config)
+                        if directa:
+                            if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
+                                resultados.append(directa)
+                                vistos.add(url)
+                                vistos.add(raw_url)
+                                vistos.add(directa["url"])
+                            else:
+                                print(f"   ⏭️ Descartado por filtros/precio: {directa['precio']:.2f} € en {directa['tienda']}")
+                                vistos.add(url)
+                                vistos.add(raw_url)
+                        else:
+                            # Si da 404, vendido, reservado o no se puede verificar: descartar sin enviar falsa alarma
+                            vistos.add(url)
+                            vistos.add(raw_url)
+                        continue
+
+                    # TIENDA RETAIL BLOQUEADA EN CENTRO DE DATOS (ej. Amazon en GitHub Actions)
+                    # En tiendas oficiales/retail donde los productos no son de segunda mano únicos,
+                    # se extrae el precio del snippet de DDG como recurso de contingencia.
                     precio = extraer_precio(texto)
                     if precio is None:
                         continue

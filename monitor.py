@@ -159,7 +159,6 @@ def convertir_numero(texto):
 
 def extraer_precio(texto):
     # 1. ELIMINAR FALSOS POSITIVOS DE FILTROS LATERALES 
-    # (ej: "menos de 25 €", "under 25 €", "unter 25 €")
     texto_limpio = re.sub(
         r'(?:under|moins de|sous|menos de|unter|less than|sotto|gifts under|regalos por debajo de|cadeaux de moins de)\s+\d+(?:[.,]\d+)?\s*(?:€|eur|euros?)', 
         '', 
@@ -167,6 +166,24 @@ def extraer_precio(texto):
         flags=re.IGNORECASE
     )
     
+    # 2. NUEVO: Buscar precios en el JSON interno de Amazon (muy fiable)
+    # Ejemplo: "priceToPay":{"amount":"152.15","currency":"EUR"}
+    json_price = re.search(r'"priceToPay":\s*\{[^}]*"amount"\s*:\s*"([\d.,]+)"', texto_limpio)
+    if json_price:
+        try:
+            return convertir_numero(json_price.group(1))
+        except ValueError:
+            pass
+            
+    # Ejemplo alternativo: "price_string":"152,15 €"
+    json_price_2 = re.search(r'"price_string"\s*:\s*"([\d.,]+\s*€)"', texto_limpio)
+    if json_price_2:
+        try:
+            return convertir_numero(json_price_2.group(1))
+        except ValueError:
+            pass
+
+    # 3. Patrones regex normales como respaldo
     patrones = [
         r"(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)\s*€",
         r"€\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{1,2})?)",
@@ -181,7 +198,6 @@ def extraer_precio(texto):
             except ValueError:
                 continue
     return None
-
 
 def extraer_envio(texto):
     texto_lower = texto.lower()
@@ -748,24 +764,39 @@ def buscar_en_ddgs(buscador, consulta, region):
 def consultar_url_directa(url, producto, config):
     session = get_robust_session()
     
-    # Copiamos los headers base y asignamos un User-Agent aleatorio para esta petición
     headers = BASE_HEADERS.copy()
     headers["User-Agent"] = random.choice(USER_AGENTS)
     
+    # Forzar estrictamente español para evitar que Amazon muestre la versión de EE.UU.
+    headers["Accept-Language"] = "es-ES,es;q=0.9,en;q=0.8"
+    
+    # Forzar cookies de localización española en Amazon
+    if "amazon.es" in url:
+        session.cookies.set('lc-main', 'es_ES', domain='.amazon.es')
+        session.cookies.set('frc', 'es_ES', domain='.amazon.es')
+    
     try:
-        # timeout=(5.0, 15.0) significa 5s para conectar, 15s para leer la respuesta
         respuesta = session.get(url, headers=headers, timeout=(3.0, 8.0))
         
         if respuesta.status_code != 200:
+            if respuesta.status_code in [403, 503]:
+                print(f"   🚫 Bloqueado ({respuesta.status_code}) por el sitio web (posible CAPTCHA o IP de GitHub): {urlparse(url).netloc}")
+            else:
+                print(f"   ⚠️ Error HTTP {respuesta.status_code} en {urlparse(url).netloc}")
             return None
             
         texto = respuesta.text
         
-        # ============================================================
-        # NUEVO: FILTRO DE DISPONIBILIDAD PARA WALLAPOP Y VINTED
-        # ============================================================
+        # Diagnóstico de producto agotado (solo si realmente lo está en la versión española)
+        if "amazon." in url.lower():
+            if re.search(r'(?:currently unavailable|temporarily out of stock|no disponible|agotado|sin stock)', texto, re.IGNORECASE):
+                # Comprobamos si es un falso positivo buscando si hay un precio en el JSON a pesar del mensaje
+                if not re.search(r'"priceToPay":\s*\{[^}]*"amount"', texto):
+                    print(f"   ⏭️ Descartado: Producto agotado/sin stock en Amazon: {urlparse(url).netloc}")
+                    return None
+
+        # Filtro de disponibilidad para Wallapop y Vinted
         if "wallapop" in url.lower() or "vinted" in url.lower():
-            # 1. Comprobar el título de la página (muy fiable, cambia al venderse)
             titulo_pagina = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
             if titulo_pagina:
                 titulo = titulo_pagina.group(1).lower()
@@ -774,15 +805,13 @@ def consultar_url_directa(url, producto, config):
                     print(f"   ⏭️ Descartado (Vendido/Reservado en título): {url}")
                     return None
             
-            # 2. Comprobar si el estado en la página indica claramente que está vendido
-            # (Busca patrones como "Estado: Vendido" para evitar falsos positivos en anuncios laterales)
             if re.search(r'(?:estado|statut|status).*?:.*?(?:vendido|sold|verkauft|vendu|reservado|réservé)', texto, re.IGNORECASE):
                 print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
                 return None
-        # ============================================================
 
         precio = extraer_precio(texto)
         if not precio:
+            print(f"   ⚠️ No se pudo extraer el precio del HTML (posible cambio de diseño o bloqueo parcial): {urlparse(url).netloc}")
             return None
             
         tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
@@ -803,14 +832,14 @@ def consultar_url_directa(url, producto, config):
             "url": url,
             "titulo": producto["nombre"],
         }
+        
     except requests.exceptions.ConnectionError as e:
-        # Si tras 3 reintentos sigue fallando (ej. IP de GitHub bloqueada), lo registramos
         print(f"   ⚠️ Conexión rechazada tras varios intentos en {urlparse(url).netloc}: {e}")
         return None
     except Exception as e:
         print(f"   ⚠️ Error inesperado en {url}: {e}")
         return None
-
+        
 def buscar_producto(producto, pais_default, config):
     consultas = generar_consultas(producto, config)
     resultados = []

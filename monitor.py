@@ -1247,7 +1247,8 @@ def consultar_url_directa(url, producto, config):
             # E) Marcadores genéricos de no disponible en HTML
             frases_no_disponible = [
                 "este producto ya se ha vendido", "producto vendido", "artículo vendido", "¡vendido!",
-                "ya no está disponible", "artículo no disponible", "item no longer available"
+                "ya no está disponible", "artículo no disponible", "cet article a été vendu",
+                "article vendu", "dieser artikel wurde verkauft", "item sold", "no longer available"
             ]
             if any(f in texto_lower for f in frases_no_disponible):
                 print(f"   ⏭️ Descartado (Marcador de no disponible en página): {url}")
@@ -1257,9 +1258,8 @@ def consultar_url_directa(url, producto, config):
                 print(f"   ⏭️ Descartado (Estado marcado como vendido/reservado): {url}")
                 return None
 
-        # 4. Intentar extraer precio si no se obtuvo previamente
-        if precio is None:
-            precio = extraer_precio(texto)
+        # 4. Intentar extraer precio
+        precio = extraer_precio(texto)
         if not precio:
             # Solo si NO hay precio comprobamos si está agotado en Amazon
             if "amazon." in url.lower() and re.search(r'(?:currently unavailable|temporarily out of stock|no disponible|agotado|sin stock)', texto, re.IGNORECASE):
@@ -1385,35 +1385,8 @@ def buscar_producto(producto, pais_default, config):
                                 vistos.add(raw_url)
                         continue
 
-                    # COMPROBAR SI ES UN MARKETPLACE DE SEGUNDA MANO (C2C: Wallapop, Vinted, eBay, Milanuncios)
-                    es_c2c = any(c in domain for c in ["wallapop", "vinted", "ebay", "milanuncios"])
-
-                    if es_c2c:
-                        # EN ANUNCIOS DE SEGUNDA MANO NUNCA NOS FIAMOS DEL SNIPPET DE DDG:
-                        # Los anuncios se venden en horas o se borran (HTTP 404), mientras los buscadores
-                        # mantienen la información vieja en caché durante semanas.
-                        # Exigimos SIEMPRE confirmación en directo:
-                        print(f"   🔍 Verificando disponibilidad en directo de anuncio C2C en {domain}: {url}")
-                        directa = consultar_url_directa(url, producto, config)
-                        if directa:
-                            if es_resultado_valido(producto, directa["titulo"], "", directa["precio"], config, directa["url"]):
-                                resultados.append(directa)
-                                vistos.add(url)
-                                vistos.add(raw_url)
-                                vistos.add(directa["url"])
-                            else:
-                                print(f"   ⏭️ Descartado por filtros/precio: {directa['precio']:.2f} € en {directa['tienda']}")
-                                vistos.add(url)
-                                vistos.add(raw_url)
-                        else:
-                            # Si da 404, vendido, reservado o no se puede verificar: descartar sin enviar falsa alarma
-                            vistos.add(url)
-                            vistos.add(raw_url)
-                        continue
-
-                    # TIENDA RETAIL BLOQUEADA EN CENTRO DE DATOS (ej. Amazon en GitHub Actions)
-                    # En tiendas oficiales/retail donde los productos no son de segunda mano únicos,
-                    # se extrae el precio del snippet de DDG como recurso de contingencia.
+                    # TIENDA BLOQUEADA EN CENTRO DE DATOS (Amazon, Wallapop, Vinted)
+                    # En estas tiendas no podemos visitar directamente desde Azure, extraemos del snippet de DDG
                     precio = extraer_precio(texto)
                     if precio is None:
                         continue

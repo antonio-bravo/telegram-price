@@ -1,3 +1,20 @@
 {
-  "ofertas": {}
+  "ofertas": {
+    "30f179587d70c2b2cfccbb24f2bb5719d797bde6d6b074aa49002093c715d029": {
+      "precio": 500.0,
+      "ultima_alerta": null
+    },
+    "41bdcf4be47291de9384ca7f1735337e16ab65d9d3b022c9ae3b9402e0059376": {
+      "precio": 503.25,
+      "ultima_alerta": null
+    },
+    "77aee1dd06465adacfec9c740952141814d761be4d27b35b048c0b40a18ad7f2": {
+      "precio": 502.25,
+      "ultima_alerta": null
+    },
+    "6ae7b839563dfb8bdfc2e751c4b267f21ee8a7dcadf4ef6f89c7dc3e79c4c6d7": {
+      "precio": 204.5,
+      "ultima_alerta": "2026-11-19T09:20:40.088003+00:00"
+    }
+  }
 }

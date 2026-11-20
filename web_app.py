@@ -382,6 +382,39 @@ HTML_PAGE = """<!DOCTYPE html>
     }
     .badge.si { background: #23863633; color: #3fb950; border: 1px solid #23863666; }
     .badge.no { background: #da363333; color: #f85149; border: 1px solid #da363366; }
+    .btn-oferta {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(31, 111, 235, 0.15);
+      color: #58a6ff;
+      border: 1px solid rgba(88, 166, 255, 0.35);
+      padding: 4px 10px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      text-decoration: none;
+      transition: all 0.15s ease;
+      white-space: nowrap;
+    }
+    .btn-oferta:hover {
+      background: #1f6feb;
+      color: #ffffff;
+      border-color: #1f6feb;
+      box-shadow: 0 0 8px rgba(31, 111, 235, 0.5);
+    }
+    .prod-link {
+      color: #58a6ff;
+      text-decoration: none;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .prod-link:hover {
+      color: #79c0ff;
+      text-decoration: underline;
+    }
     .search-input {
       background: #0d1117;
       border: 1px solid var(--border);
@@ -549,7 +582,7 @@ HTML_PAGE = """<!DOCTYPE html>
               <th>Envío</th>
               <th>Total Unidad</th>
               <th>Cumple</th>
-              <th>Enlace</th>
+              <th style="min-width: 140px;">Enlace / Oferta</th>
             </tr>
           </thead>
           <tbody id="tabla-historico-body">
@@ -951,7 +984,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const q = document.getElementById('filtro-historico').value.toLowerCase().trim();
       const filtrados = HISTORIAL_ACTUAL.filter(r => {
         if (!q) return true;
-        const texto = `${r.producto} ${r.tienda} ${r.pais} ${r.fecha}`.toLowerCase();
+        const texto = `${r.producto} ${r.tienda} ${r.pais} ${r.fecha} ${r.url || ''}`.toLowerCase();
         return texto.includes(q);
       });
 
@@ -966,17 +999,30 @@ HTML_PAGE = """<!DOCTYPE html>
       tbody.innerHTML = filtrados.slice(0, 150).map(r => {
         const fechaStr = r.fecha ? r.fecha.replace('T', ' ').substring(0, 19) : '-';
         const cumple = (r.cumple_objetivo || '').toUpperCase() === 'SI';
+        const urlOferta = r.url && r.url.startsWith('http') ? r.url : '';
         return `
           <tr>
             <td style="font-size:0.75rem; color:var(--text-muted);">${fechaStr}</td>
-            <td><strong>${escapeHtml(r.producto || '')}</strong></td>
+            <td>
+              ${urlOferta ? `
+                <a href="${escapeHtml(urlOferta)}" target="_blank" rel="noopener noreferrer" class="prod-link" title="Abrir: ${escapeHtml(urlOferta)}">
+                  ${escapeHtml(r.producto || 'Producto')} <span style="font-size:0.75rem;">↗</span>
+                </a>
+              ` : `<strong>${escapeHtml(r.producto || '')}</strong>`}
+            </td>
             <td>${escapeHtml(r.tienda || '')}</td>
             <td>${escapeHtml(r.pais || '')}</td>
             <td>${r.precio_producto ? r.precio_producto + ' €' : '-'}</td>
             <td style="font-size:0.75rem;">${escapeHtml(r.envio || '-')}</td>
             <td style="font-weight:600;">${r.total_unidad_con_envio ? r.total_unidad_con_envio + ' €' : '-'}</td>
             <td><span class="badge ${cumple ? 'si' : 'no'}">${cumple ? 'SI' : 'NO'}</span></td>
-            <td><a href="${escapeHtml(r.url || '#')}" target="_blank" style="color:var(--blue); text-decoration:none;">🔗 Ver</a></td>
+            <td>
+              ${urlOferta ? `
+                <a href="${escapeHtml(urlOferta)}" target="_blank" rel="noopener noreferrer" class="btn-oferta" title="${escapeHtml(urlOferta)}">
+                  <span>🔗 Abrir Oferta</span> ↗
+                </a>
+              ` : '<span style="color:var(--text-muted);">-</span>'}
+            </td>
           </tr>
         `;
       }).join('');

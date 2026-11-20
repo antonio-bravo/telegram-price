@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "monitor.py"
+      - "web_app.py"
       - "requirements.txt"
       - "docker/**"
       - ".github/workflows/docker-publish.yml"

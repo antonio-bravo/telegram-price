@@ -89,6 +89,31 @@ docker compose logs -f
 
 ---
 
+## 🌐 Panel Web Frontend (Móvil, Tablet y PC)
+
+El contenedor incluye un **panel web ultraligero (~10 MB RAM)** accesible desde cualquier dispositivo conectado a tu red local (móvil, tablet u ordenador):
+
+> **Acceso:** `http://<IP_DE_TU_NAS>:9999` (ejemplo: `http://192.168.1.100:9999`)
+
+### Funcionalidades del Panel:
+1. **Gestión de Productos (`config.json`):**
+   - Añade, edita, pausa o elimina productos con un solo clic.
+   - Modifica precios máximos, cantidades o términos de búsqueda de forma visual.
+   - Ajusta parámetros globales (país, solo UE, envíos estimados).
+2. **Frecuencia de Escaneo Dinámica:**
+   - Modifica la frecuencia de comprobación periódica (ej. cada 15, 30 o 60 minutos) desde la pestaña **"Ajustes Globales"**.
+   - El contenedor detecta el cambio en vivo sin necesidad de reiniciar Docker.
+3. **Previsualizador de Histórico (`historico.csv`):**
+   - Vista de tabla estilo GitHub con buscador en tiempo real.
+   - Insignias de cumplimiento (`SI` / `NO`), banderas por país y enlaces directos a las ofertas.
+4. **Control de Estado (`monitor_state.json`):**
+   - Consulta qué ofertas están registradas para evitar spam.
+   - Borra registros específicos para que el bot vuelva a alertarte si lo deseas.
+5. **Comprobación Inmediata bajo demanda:**
+   - Botón `▶️ Comprobar Ahora` con consola en vivo para ejecutar el rastreo al instante sin esperar al temporizador.
+
+---
+
 ## 💾 Persistencia de Datos
 
 El contenedor mapea automáticamente estos tres archivos en tu NAS:

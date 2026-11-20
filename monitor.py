@@ -333,7 +333,35 @@ def extraer_precio(texto):
             pass
 
     # 7. SELECTORES HTML ESPECÍFICOS DE AMAZON
-    # A) <span class="a-offscreen">179,00 €</span>
+    # A) Buy Box principal de Amazon (apexPriceToPay / corePriceDisplay / priceToPay)
+    m_amazon_buybox = re.search(
+        r'class=[\'"][^\'"]*(?:apex-pricetopay-value|priceToPay|corePriceDisplay)[^\'"]*[\'"][^>]*>.*?<span[^>]*class=[\'"][^\'"]*a-offscreen[^\'"]*[\'"][^>]*>([^<]+)</span>',
+        texto_limpio,
+        re.DOTALL | re.IGNORECASE
+    )
+    if m_amazon_buybox and m_amazon_buybox.group(1).strip():
+        try:
+            p = convertir_numero(m_amazon_buybox.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    # B) Datos ocultos del producto principal en Amazon (twister-plus / customerVisiblePrice)
+    m_amazon_input = re.search(
+        r'<input[^>]+(?:id=[\'"]twister-plus-price-data-price[\'"]|name=[\'"][^\'"]*customerVisiblePrice\[amount\][\'"])[^>]+value=[\'"]([\d.,]+)[\'"]',
+        texto_limpio,
+        re.IGNORECASE
+    )
+    if m_amazon_input:
+        try:
+            p = convertir_numero(m_amazon_input.group(1))
+            if 1 <= p <= 100000:
+                return p
+        except ValueError:
+            pass
+
+    # C) <span class="a-offscreen">179,00 €</span>
     for m in re.finditer(r'<span[^>]*class=[\'"][^\'"]*a-offscreen[^\'"]*[\'"][^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE):
         try:
             p = convertir_numero(m.group(1))
@@ -764,6 +792,52 @@ def detectar_tienda_y_pais(url):
     return domain, "🇪🇺 Europa (UE)", True
 
 
+def detectar_condicion(url, titulo="", texto_html=""):
+    """
+    Detecta si una oferta es Nueva o Reacondicionada / Segunda mano
+    (especialmente útil para Amazon Segunda Mano, Amazon Warehouse, Renewed, etc.)
+    """
+    texto_eval = f"{titulo}".lower()
+    url_lower = url.lower()
+
+    # 1. Marketplaces de segunda mano (C2C)
+    if "wallapop" in url_lower or "vinted" in url_lower:
+        return "Segunda mano (Wallapop/Vinted)"
+
+    # 2. Título o URL explícitos (Amazon, PcComponentes, MediaMarkt, etc.)
+    palabras_reacondicionado = [
+        "reacondicionado", "reacondicionada", "renewed", "refurbished",
+        "segunda mano", "2ª mano", "d'occasion", "gebraucht", "usato",
+        "outlet", "como nuevo", "b-ware"
+    ]
+    if any(p in texto_eval for p in palabras_reacondicionado):
+        return "Reacondicionado / Segunda mano"
+    if any(p in url_lower for p in ["reacondicionado", "renewed", "warehouse", "outlet"]):
+        return "Reacondicionado / Segunda mano"
+
+    # 3. Comprobación en Schema.org JSON-LD
+    texto_html_lower = texto_html.lower() if texto_html else ""
+    if "schema.org/usedcondition" in texto_html_lower or "schema.org/refurbishedcondition" in texto_html_lower:
+        return "Reacondicionado / Segunda mano"
+
+    # 4. Amazon específico: Vendedor o Buy Box de segunda mano
+    if "amazon." in url_lower and texto_html:
+        # Vendedor de Amazon Warehouse / Segunda mano
+        if re.search(r'(?:vendido por|sold by|dispatched from|vendu par|verkauft von)\s*[:]?\s*(?:<[^>]+>)*\s*amazon\s+(?:segunda\s+mano|warehouse|renewed)', texto_html, re.IGNORECASE):
+            return "Amazon Segunda Mano (Reacondicionado)"
+        
+        # Bloque de condición de producto en Amazon
+        m_cond = re.search(r'id=[\'"]condition[\'"][^>]*>(.*?)</div>', texto_html, re.IGNORECASE | re.DOTALL)
+        if m_cond and any(k in m_cond.group(1).lower() for k in ["segunda mano", "usado", "used", "reacondicionado", "renewed", "d'occasion", "gebraucht"]):
+            return "Amazon Segunda Mano (Reacondicionado)"
+
+        # Acordeón de compra usado seleccionado
+        if re.search(r'id=[\'"](?:usedBuyBox|usedAccordionRow)[\'"][^>]*class=[\'"][^\'"]*selected', texto_html, re.IGNORECASE):
+            return "Amazon Segunda Mano (Reacondicionado)"
+
+    return "Nuevo"
+
+
 # ============================================================
 # VALIDACION Y FILTRADO DE RESULTADOS
 # ============================================================
@@ -1132,11 +1206,18 @@ def crear_mensaje(producto, oferta, evaluacion, bajada=False):
     titulo = "📉 BAJADA DE PRECIO" if bajada else "🛒 NUEVA OFERTA"
     tienda = oferta.get("tienda_nombre", oferta["tienda"])
     pais = oferta.get("pais", "🇪🇺 Europa")
+    condicion = oferta.get("condicion", "Nuevo")
+
+    if "reacondicionado" in condicion.lower() or "segunda mano" in condicion.lower() or "renewed" in condicion.lower():
+        estado_str = f"♻️ {condicion}"
+    else:
+        estado_str = "🆕 Nuevo"
 
     mensaje = (
         f"{titulo}\n\n"
         f"📦 {producto['nombre']}\n"
-        f"🏪 Tienda: {tienda} ({pais})\n\n"
+        f"🏪 Tienda: {tienda} ({pais})\n"
+        f"🏷️ Estado: {estado_str}\n\n"
         f"💶 Precio producto: {oferta['precio']:.2f} {moneda}\n"
         f"🚚 Gastos de envío a España: {evaluacion['origen_envio']}\n"
         f"💰 Total unidad (con envío): {evaluacion['total_unidad']:.2f} {moneda}\n"
@@ -1466,6 +1547,7 @@ def consultar_url_directa(url, producto, config):
             
         tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
         envio = extraer_envio(texto)
+        condicion = detectar_condicion(url, titulo_real, texto)
         
         if envio is None and "Amazon España" in tienda_nombre and precio >= 35.0:
             envio = 0.0
@@ -1481,6 +1563,7 @@ def consultar_url_directa(url, producto, config):
             "envio": envio,
             "url": url,
             "titulo": titulo_real,
+            "condicion": condicion,
         }
         
     except Exception as e:
@@ -1655,6 +1738,7 @@ def buscar_producto(producto, pais_default, config):
                     vistos.add(dedup_key)
                     tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
                     envio = extraer_envio(texto)
+                    condicion = detectar_condicion(url, titulo, descripcion)
 
                     if envio is None and "amazon.es" in domain and precio >= 35.0:
                         envio = 0.0
@@ -1670,6 +1754,7 @@ def buscar_producto(producto, pais_default, config):
                         "envio": envio,
                         "url": url,
                         "titulo": titulo,
+                        "condicion": condicion,
                     })
                 
                 # Pausa humana entre cada consulta de búsqueda (evita rate limits de DDG)

@@ -13,6 +13,12 @@ services:
     container_name: price-monitor
     restart: unless-stopped
 
+    ports:
+      # ============================================================
+      # PANEL WEB (Accede desde navegador a http://<IP_NAS>:9999)
+      # ============================================================
+      - "9999:9999"
+
     environment:
       # ============================================================
       # CREDENCIALES DE TELEGRAM (Inyecta aquí tus valores directamente)
@@ -21,9 +27,10 @@ services:
       - TELEGRAM_CHAT_ID=TU_CHAT_ID_AQUI
 
       # ============================================================
-      # PARÁMETROS DEL MONITOR
+      # PARÁMETROS DEL MONITOR Y PANEL WEB
       # ============================================================
-      # Intervalo en minutos entre cada búsqueda (ejemplo: 30, 60, 120)
+      # Intervalo en minutos entre cada búsqueda (ejemplo: 15, 30, 60, 120).
+      # Puedes modificarlo aquí o directamente en vivo desde la pestaña "Ajustes Globales" del panel web
       - CHECK_INTERVAL_MINUTES=60
 
       # Realizar una comprobación inmediata al arrancar el contenedor
@@ -32,6 +39,10 @@ services:
       # Modo Residencial: al ejecutarse en tu NAS con IP doméstica, permite consultar
       # tiendas como Amazon, Wallapop y Vinted directamente sin bloqueos de IP
       - MODO_RESIDENCIAL=true
+
+      # Panel web local (puerto 9999)
+      - WEB_PORT=9999
+      - WEB_ENABLED=true
 
       # Zona horaria para las fechas y horas del registro
       - TZ=Europe/Madrid

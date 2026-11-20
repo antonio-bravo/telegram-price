@@ -1,6 +1,7 @@
 {
   "pais": "España",
   "moneda": "EUR",
+  "intervalo_minutos": 60,
   "solo_union_europea": true,
   "incluir_wallapop_vinted": true,
   "ignorar_vendidos": true,

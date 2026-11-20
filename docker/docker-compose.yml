@@ -12,6 +12,7 @@ services:
 
     container_name: price-monitor
     restart: unless-stopped
+    pull_policy: always
 
     ports:
       # ============================================================

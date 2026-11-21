@@ -26,30 +26,6 @@
       "activo": true
     },
     {
-      "id": "wd-red-6tb",
-      "nombre": "WD Red Plus 6TB",
-      "busqueda": "WD60EFPX",
-      "capacidad": 6,
-      "unidad_medida": "TB",
-      "precio_maximo_unidad": 310,
-      "precio_maximo_pedido": null,
-      "precio_maximo_por_unidad_medida": null,
-      "cantidad": 2,
-      "activo": true
-    },
-    {
-      "id": "wd-red-6tb+",
-      "nombre": "WD Red Plus 6TB",
-      "busqueda": "WD69EFPX-SPC5ZN0",
-      "capacidad": 6,
-      "unidad_medida": "TB",
-      "precio_maximo_unidad": 310,
-      "precio_maximo_pedido": null,
-      "precio_maximo_por_unidad_medida": null,
-      "cantidad": 1,
-      "activo": true
-    },
-    {
       "id": "iphone",
       "nombre": "iPhone",
       "busqueda": "Apple iPhone 17 256GB nuevo",
@@ -60,18 +36,6 @@
       "precio_maximo_por_unidad_medida": null,
       "cantidad": 1,
       "activo": false
-    },
-    {
-      "id": "Halo-2",
-      "nombre": "ScreenBar Halo 2",
-      "busqueda": "ScreenBar Halo 2",
-      "capacidad": null,
-      "unidad_medida": null,
-      "precio_maximo_unidad": 180,
-      "precio_maximo_pedido": null,
-      "precio_maximo_por_unidad_medida": null,
-      "cantidad": 1,
-      "activo": true
     },
     {
       "id": "8BitDo-64",

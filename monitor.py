@@ -553,17 +553,24 @@ def generar_consultas(producto, config):
     busqueda = producto.get("busqueda", "").strip()
     buscar_europa = config.get("solo_union_europea", True)
     consultas = []
+
     tokens = busqueda.split()
     modelos = [t for t in tokens if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 5]
     termino = modelos[0].split("-")[0] if modelos else busqueda
     termino_c2c = modelos[0] if modelos else busqueda
+
+    # Consultas más simples y efectivas para DuckDuckGo
     if buscar_europa:
-        consultas.append((f'"{termino}" (site:hoteudeals.com OR site:geizhals.de OR site:idealo.de OR site:idealo.es OR site:guenstiger.de OR site:priceinfo.eu OR site:cenypc.pl OR site:amazon.de OR site:amazon.it)', "es-es"))
-        consultas.append((f'"{termino}" (site:mindfactory.de OR site:playox.de OR site:galaxus.de OR site:megekko.nl OR site:yorcom.nl OR site:allegro.pl OR site:proline.pl OR site:komputronik.pl OR site:soloperaffare.it)', "es-es"))
-        consultas.append((f'"{termino}" (site:amazon.es OR site:pccomponentes.com OR site:mediamarkt.es OR site:informaticabarata.com OR site:shopdutyfree.es OR site:senetic.es OR site:europeanpc.es)', "es-es"))
+        consultas.append((f'"{termino}" site:amazon.de OR site:amazon.it OR site:amazon.es', "es-es"))
+        consultas.append((f'"{termino}" site:idealo.de OR site:idealo.es OR site:geizhals.de OR site:guenstiger.de', "es-es"))
+        consultas.append((f'"{termino}" site:pccomponentes.com OR site:mediamarkt.es OR site:mediamarkt.de', "es-es"))
+    
     if config.get("incluir_wallapop_vinted", True):
-        consultas.append((f'"{termino_c2c}" (site:wallapop.com OR site:vinted.es) -vendido -reservado ("€" OR "EUR")', "es-es"))
-    consultas.append((f'"{termino}" (precio OR offer OR price OR preis) ("€" OR "EUR" OR "zł")', "es-es"))
+        consultas.append((f'"{termino_c2c}" site:wallapop.com OR site:vinted.es -vendido -reservado ("€" OR "EUR")', "es-es"))
+    
+    # Consulta general de respaldo
+    consultas.append((f'"{termino}" precio OR price OR preis ("€" OR "EUR")', "es-es"))
+
     vistos = set()
     return [(c, reg) for c, reg in consultas if c not in vistos and not vistos.add(c)]
 
@@ -719,13 +726,14 @@ async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
         except Exception as e:
             print(f"   ⚠️ Error en {urlparse(url).netloc}: {e}")
             return None
-            
+
 async def buscar_producto_async(producto, pais_default, config, browser_mgr):
     consultas = generar_consultas(producto, config)
     resultados = []
     vistos = set()
-    semaphore = asyncio.Semaphore(5)
+    semaphore = asyncio.Semaphore(5) # Máximo 5 peticiones simultáneas
 
+    # 1. Procesar URLs fijas en paralelo
     urls_fijas = []
     if producto.get("url"): urls_fijas.append(producto["url"])
     if producto.get("urls") and isinstance(producto["urls"], list): urls_fijas.extend(producto["urls"])
@@ -738,24 +746,43 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                 resultados.append(res)
                 vistos.add(res["url"])
 
+    # 2. Búsqueda DuckDuckGo con FILTRADO ESTRICTO ANTES DE SCRAPEAR
     try:
         with DDGS() as buscador:
             for i, (consulta, region) in enumerate(consultas):
                 if i > 0: await asyncio.sleep(random.uniform(0.5, 1.0))
                 try:
-                    encontrados = list(buscador.text(consulta, region=region, max_results=8))
+                    encontrados = list(buscador.text(consulta, region=region, max_results=10))
                 except Exception:
                     continue
+
                 tasks_ddg = []
                 for res in encontrados:
                     raw_url = res.get("href", "")
                     if not raw_url.startswith(("http://", "https://")): continue
+                    
                     url = canonicalizar_url(raw_url)
                     domain = urlparse(url).netloc.lower().removeprefix("www.")
-                    if any(ign in domain for ign in DOMINIOS_IGNORADOS) or url in vistos: continue
-                    if "amazon." in domain and "/dp/" not in url and "/gp/product/" not in url: continue
-                    if "wallapop" in domain and "/item/" not in url: continue
+                    
+                    # FILTRO 1: Dominios ignorados (buscadores, publicidad)
+                    if any(ign in domain for ign in DOMINIOS_IGNORADOS): continue
+                    
+                    # FILTRO 2: Dominios que NO son tiendas (evita support.microsoft.com, wikipedia, foros, etc.)
+                    dominios_no_tienda = ["support.", "techcommunity.", "answers.", "wikipedia.org", "youtube.com", "reddit.com", "twitter.com", "facebook.com", "instagram.com", "tiktok.com"]
+                    if any(no_tienda in domain for no_tienda in dominios_no_tienda): continue
+                    
+                    # FILTRO 3: URLs ya vistas
+                    if url in vistos: continue
+                    
+                    # FILTRO 4: Validación estricta de URL de producto (usa tu función existente)
+                    if not es_url_producto_valida(url, domain): continue
+                    
+                    # FILTRO 5: Solo permitir dominios que sean tiendas UE o marketplaces conocidos
+                    if not es_tienda_ue(url) and not any(x in domain for x in ["amazon.", "wallapop", "vinted", "ebay"]):
+                        continue
+
                     tasks_ddg.append(consultar_url_async(url, producto, config, browser_mgr, semaphore))
+
                 if tasks_ddg:
                     resultados_ddg = await asyncio.gather(*tasks_ddg, return_exceptions=True)
                     for res in resultados_ddg:
@@ -763,10 +790,12 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                             if es_resultado_valido(producto, res["titulo"], "", res["precio"], config, res["url"]):
                                 resultados.append(res)
                                 vistos.add(res["url"])
+                                
     except Exception as error:
         print(f"Error general en buscador para '{producto['nombre']}': {error}")
+        
     return resultados
-
+    
 # ============================================================
 # PROGRAMA PRINCIPAL ACTUALIZADO (ASYNC)
 # ============================================================

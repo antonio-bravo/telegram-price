@@ -623,24 +623,40 @@ def es_tienda_bloqueada_en_datacenter(domain):
 # ============================================================
 # MOTOR ASÍNCRONO CON PLAYWRIGHT (NUEVO)
 # ============================================================
+# ============================================================
+# MOTOR ASÍNCRONO CON PLAYWRIGHT (TOLERANTE A FALLOS)
+# ============================================================
 class BrowserManager:
     def __init__(self):
         self.playwright = None
         self.browser = None
+        self.disponible = False
 
     async def start(self):
-        from playwright.async_api import async_playwright
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            headless=True,
-            args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
-        )
+        try:
+            from playwright.async_api import async_playwright
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-setuid-sandbox', '--disable-blink-features=AutomationControlled']
+            )
+            self.disponible = True
+            print("✅ Motor de navegador (Playwright) iniciado correctamente.")
+        except Exception as e:
+            print(f"⚠️ Playwright no disponible o falló al iniciar: {e}")
+            print("   ℹ️ Se usará únicamente el método de petición rápida (aiohttp).")
+            print("   ℹ️ Para activar Playwright en GitHub Actions, añade 'run: playwright install chromium' en tu workflow .yml")
+            self.disponible = False
 
     async def stop(self):
-        if self.browser: await self.browser.close()
-        if self.playwright: await self.playwright.stop()
+        if self.browser:
+            await self.browser.close()
+        if self.playwright:
+            await self.playwright.stop()
 
     async def get_page_content(self, url):
+        if not self.disponible or not self.browser:
+            return None, None
         context = await self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
             viewport={'width': 1920, 'height': 1080}
@@ -681,26 +697,29 @@ async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
                                 "titulo": titulo, "condicion": detectar_condicion(url, titulo, texto),
                             }
                     
-                    print(f"   🔄 Fallo/Price missing en {urlparse(url).netloc}. Usando navegador real (Playwright)...")
-                    html_content, titulo_real = await browser_mgr.get_page_content(url)
-                    if not html_content: return None
-                    precio_pw = extraer_precio(html_content)
-                    if not precio_pw:
-                        print(f"   ⚠️ Ni siquiera Playwright pudo extraer el precio en {urlparse(url).netloc}")
-                        return None
-                    tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
-                    return {
-                        "producto_id": producto["id"], "producto": producto["nombre"],
-                        "tienda": urlparse(url).netloc.lower().removeprefix("www."),
-                        "tienda_nombre": tienda_nombre, "pais": pais, "es_internacional": es_inter,
-                        "precio": precio_pw, "envio": extraer_envio(html_content), "url": url,
-                        "titulo": titulo_real or producto["nombre"],
-                        "condicion": detectar_condicion(url, titulo_real, html_content),
-                    }
+                    # 2. FALLBACK: Si falla o no encuentra precio, usamos Playwright (SOLO si está disponible)
+                    if browser_mgr.disponible:
+                        print(f"   🔄 Fallo/Price missing en {urlparse(url).netloc}. Usando navegador real (Playwright)...")
+                        html_content, titulo_real = await browser_mgr.get_page_content(url)
+                        if html_content:
+                            precio_pw = extraer_precio(html_content)
+                            if precio_pw:
+                                tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
+                                return {
+                                    "producto_id": producto["id"], "producto": producto["nombre"],
+                                    "tienda": urlparse(url).netloc.lower().removeprefix("www."),
+                                    "tienda_nombre": tienda_nombre, "pais": pais, "es_internacional": es_inter,
+                                    "precio": precio_pw, "envio": extraer_envio(html_content), "url": url,
+                                    "titulo": titulo_real or producto["nombre"],
+                                    "condicion": detectar_condicion(url, titulo_real, html_content),
+                                }
+                    else:
+                        print(f"   ⚠️ No se pudo extraer el precio en {urlparse(url).netloc} (Playwright no disponible en este entorno).")
+                    return None
         except Exception as e:
             print(f"   ⚠️ Error en {urlparse(url).netloc}: {e}")
             return None
-
+            
 async def buscar_producto_async(producto, pais_default, config, browser_mgr):
     consultas = generar_consultas(producto, config)
     resultados = []

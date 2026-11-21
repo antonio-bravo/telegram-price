@@ -1,3 +1,7 @@
 ddgs
 requests
 curl-cffi
+urllib3
+duckduckgo-search
+playwright
+aiohttp

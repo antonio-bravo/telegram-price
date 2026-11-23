@@ -14,6 +14,10 @@ services:
     restart: unless-stopped
     pull_policy: always
 
+    # Etiqueta obligatoria para que Watchtower actualice este contenedor
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
     ports:
       # ============================================================
       # PANEL WEB (Accede desde navegador a http://<IP_NAS>:9999)
@@ -49,16 +53,31 @@ services:
       - TZ=Europe/Madrid
       - PYTHONUNBUFFERED=1
 
+      - DATA_DIR=/app/data
+
     volumes:
       # ============================================================
       # PERSISTENCIA DE DATOS
       # ============================================================
       # Mapea los archivos del host dentro del contenedor.
       # Asegúrate de que config.json esté en la misma carpeta que este docker-compose.yml
-      - ./config.json:/app/config.json
-      - ./monitor_state.json:/app/monitor_state.json
-      - ./historico.csv:/app/historico.csv
+      # - ./config.json:/app/config.json
+      # - ./monitor_state.json:/app/monitor_state.json
+      # - ./historico.csv:/app/historico.csv
 
       # NOTA ALTERNATIVA: Si prefieres mapear una carpeta completa 'data', usa:
-      # - ./data:/app/data
+      - ./data:/app/data
       # y añade en environment: - DATA_DIR=/app/data
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: price-monitor-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Europe/Madrid
+      - WATCHTOWER_LABEL_ENABLE=true
+      - WATCHTOWER_CLEANUP=true
+      # Ejecuta la comprobación todos los dias a las 06:30 hora peninsular
+      - WATCHTOWER_SCHEDULE=0 30 6 * * *

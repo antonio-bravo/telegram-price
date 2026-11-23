@@ -78,6 +78,11 @@ def cargar_estado():
                 datos = json.load(f)
                 if isinstance(datos, dict):
                     datos.setdefault("ofertas", {})
+                    # Limpiamos registros sin alerta previa para no bloquear ofertas futuras
+                    datos["ofertas"] = {
+                        k: v for k, v in datos["ofertas"].items()
+                        if isinstance(v, dict) and v.get("ultima_alerta") is not None
+                    }
                     return datos
         except (OSError, json.JSONDecodeError):
             print("Estado anterior inválido. Se inicia uno nuevo.")
@@ -523,28 +528,60 @@ def procesar_oferta(producto, oferta, config, estado):
     ofertas_guardadas = estado.setdefault("ofertas", {})
     anterior = ofertas_guardadas.get(clave)
     precio_actual = evaluacion["total_unidad"]
-    es_nueva = anterior is None
-    ha_bajado = anterior is not None and anterior.get("precio") is not None and precio_actual < float(anterior["precio"])
+
+    alerta_previa_activa = (anterior is not None and anterior.get("ultima_alerta") is not None)
+    precio_anterior = float(anterior["precio"]) if (anterior is not None and anterior.get("precio") is not None) else None
+
     avisar = False
     es_bajada = False
+    ha_subido = False
+
     if evaluacion["cumple"]:
-        if es_nueva: avisar = True
-        elif ha_bajado and config.get("notificar_bajadas", True): avisar = True; es_bajada = True
-        elif not config.get("solo_nuevas_ofertas", True) and not ha_bajado: avisar = True
-    if avisar:
-        print(f"  🔔 ¡Oferta cumple criterios! Enviando a Telegram: {evaluacion['total_unidad']:.2f} €/unidad ({oferta['tienda_nombre']})...")
-        if enviar_telegram(crear_mensaje(producto, oferta, evaluacion, es_bajada), config=config):
-            print("  ✅ Notificación de Telegram enviada con éxito.")
-            ofertas_guardadas[clave] = {"precio": precio_actual, "ultima_alerta": datetime.now(timezone.utc).isoformat()}
+        if not alerta_previa_activa:
+            # Oferta nueva o previamente invalidada porque el precio había subido / no cumplía
+            avisar = True
         else:
-            print("  ❌ No se pudo enviar la notificación a Telegram.")
+            # Ya fue notificada previamente y sigue en precio objetivo
+            ha_bajado = precio_anterior is not None and precio_actual < precio_anterior
+            ha_subido = precio_anterior is not None and precio_actual > precio_anterior
+
+            if ha_bajado and config.get("notificar_bajadas", True):
+                avisar = True
+                es_bajada = True
+            elif ha_subido:
+                # El precio subió pero aún sigue dentro del precio deseado:
+                # Actualizamos el precio registrado para detectar futuras bajadas a partir de este nuevo nivel
+                ofertas_guardadas[clave]["precio"] = precio_actual
+                print(f"  ℹ️ [{oferta['pais']}] {oferta['tienda_nombre']}: El precio subió de {precio_anterior:.2f} € a {precio_actual:.2f} € (sigue cumpliendo). Precio actualizado en estado.")
+            elif not config.get("solo_nuevas_ofertas", True) and not ha_bajado:
+                avisar = True
+
+        if avisar:
+            tipo = "Bajada de precio" if es_bajada else "Oferta en precio deseado"
+            print(f"  🔔 ¡{tipo}! Enviando a Telegram: {evaluacion['total_unidad']:.2f} €/unidad ({oferta['tienda_nombre']})...")
+            if enviar_telegram(crear_mensaje(producto, oferta, evaluacion, es_bajada), config=config):
+                print("  ✅ Notificación de Telegram enviada con éxito.")
+                ofertas_guardadas[clave] = {
+                    "precio": precio_actual,
+                    "ultima_alerta": datetime.now(timezone.utc).isoformat()
+                }
+            else:
+                print("  ❌ No se pudo enviar la notificación a Telegram.")
+        else:
+            if not ha_subido:
+                print(f"  ℹ️ [{oferta['pais']}] {oferta['tienda_nombre']} ({precio_actual:.2f} €): Ya notificada previamente sin variación a la baja.")
     else:
+        # NO CUMPLE EL OBJETIVO DE PRECIO
+        # Si la oferta estaba en el histórico/estado con alerta previa, queda INVALIDADA
+        # ya que los precios cambian y ya no está al precio deseado.
+        # Al invalidarla, cuando vuelva a estar a un precio deseado podrá notificarse nuevamente.
+        if clave in ofertas_guardadas:
+            ofertas_guardadas.pop(clave, None)
+            if alerta_previa_activa:
+                print(f"  🔄 [{oferta['pais']}] {oferta['tienda_nombre']}: El precio ({precio_actual:.2f} €) ya no cumple objetivo. Histórico/alerta previa invalidada.")
+
         if evaluacion.get("motivo_descarte"):
             print(f"  ℹ️ [{oferta['pais']}] {oferta['tienda_nombre']} ({oferta['precio']:.2f} €): {evaluacion['motivo_descarte']}")
-        if anterior is None:
-            ofertas_guardadas[clave] = {"precio": precio_actual, "ultima_alerta": None}
-        elif ha_bajado:
-            ofertas_guardadas[clave]["precio"] = precio_actual
 
 # ============================================================
 # GENERACION DE CONSULTAS Y BUSQUEDA

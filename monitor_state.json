@@ -1,3 +1,24 @@
 {
-  "ofertas": {}
+  "ofertas": {
+    "d0181c4d5356f16b12de89daaab97867ff445437165c8ecca6b3c2e9ee2deadd": {
+      "precio": 199.99,
+      "ultima_alerta": "2026-11-24T14:24:30.664055+00:00"
+    },
+    "2fad22fc09e4119794017aba6f71bb573b0db60d54bece65362b25b6f28b0252": {
+      "precio": 353.97,
+      "ultima_alerta": "2026-11-24T14:24:31.237162+00:00"
+    },
+    "77aee1dd06465adacfec9c740952141814d761be4d27b35b048c0b40a18ad7f2": {
+      "precio": 382.99,
+      "ultima_alerta": "2026-11-24T14:24:31.713270+00:00"
+    },
+    "bf6fcd5c2b33deca68e190067564c3a2fb6649bb18a1edbfddae486123365dc7": {
+      "precio": 319.95,
+      "ultima_alerta": "2026-11-24T14:24:32.221911+00:00"
+    },
+    "609c730da72ec16d16b0a075c221b9241392919666b242eba77955bbe900acc9": {
+      "precio": 39.99,
+      "ultima_alerta": "2026-11-24T14:24:33.061908+00:00"
+    }
+  }
 }

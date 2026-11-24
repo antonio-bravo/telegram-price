@@ -129,10 +129,82 @@ def convertir_numero(texto):
         num_str = num_str.replace(",", ".")
     return float(num_str)
 
-def extraer_precio(texto):
+def extraer_precio_amazon(texto):
+    if not texto: return None
+    # 1. Inputs ocultos oficiales del precio del producto principal de Amazon
+    patrones_input = [
+        r"""<input[^>]+id=["\x27]twister-plus-price-data-price["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
+        r"""<input[^>]+name=["\x27]priceValue["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
+        r"""<input[^>]+name=["\x27]items\[0\.base\]\[customerVisiblePrice\]\[amount\]["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
+    ]
+    for p in patrones_input:
+        m = re.search(p, texto, re.IGNORECASE)
+        if m:
+            try:
+                val = float(m.group(1).replace(",", "."))
+                if 1 <= val <= 100000: return val
+            except ValueError: pass
+
+    # 2. JSON de twister-plus-buying-options-price-data
+    m_twister = re.search(r"""twister-plus-buying-options-price-data["\x27][^>]*>(\{.*?\})</div>""", texto, re.DOTALL)
+    if m_twister:
+        m_amt = re.search(r"""["\x27]priceAmount["\x27]\s*:\s*([\d.]+)""", m_twister.group(1))
+        if m_amt:
+            try:
+                val = float(m_amt.group(1))
+                if 1 <= val <= 100000: return val
+            except ValueError: pass
+
+    # 3. Contenedores de precio principal de Amazon (corePrice, apex, buybox)
+    bloques_precio = [
+        r"""id=["\x27](?:corePriceDisplay_desktop_feature_div|corePrice_desktop|apex_desktop|desktop_buybox)["\x27][^>]*>(.*?)</div>\s*</div>""",
+        r"""class=["\x27][^"\x27]*(?:apex-pricetopay-value|priceToPay|corePriceDisplay|reinventPricePriceToPayMargin)[^"\x27]*["\x27][^>]*>(.*?)</span>\s*</span>""",
+    ]
+    for bp in bloques_precio:
+        m_bp = re.search(bp, texto, re.DOTALL | re.IGNORECASE)
+        if m_bp:
+            bloque = m_bp.group(1)
+            m_off = re.search(r"""class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", bloque, re.IGNORECASE)
+            if m_off:
+                clean = re.sub(r"[^\d.,]", "", m_off.group(1).replace(",", "."))
+                try:
+                    val = float(clean)
+                    if 1 <= val <= 100000: return val
+                except ValueError: pass
+
+    # 4. Selectores clásicos de Amazon
+    m_pb = re.search(r"""id=["\x27](?:priceblock_ourprice|priceblock_dealprice|price_inside_buybox)["\x27][^>]*>([^<]+)</span>""", texto, re.IGNORECASE)
+    if m_pb:
+        clean = re.sub(r"[^\d.,]", "", m_pb.group(1).replace(",", "."))
+        try:
+            val = float(clean)
+            if 1 <= val <= 100000: return val
+        except ValueError: pass
+
+    # 5. Ofertas de otros vendedores (OLP)
+    m_olp = re.search(r"""href=["\x27][^"\x27]*(?:/gp/offer-listing/|/dp-olp/)[^"\x27]*["\x27][^>]*>.*?<span[^>]*class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", texto, re.DOTALL | re.IGNORECASE)
+    if m_olp:
+        clean = re.sub(r"[^\d.,]", "", m_olp.group(1).replace(",", "."))
+        try:
+            val = float(clean)
+            if 1 <= val <= 100000: return val
+        except ValueError: pass
+
+    # En Amazon NUNCA usar fallback global para evitar capturar anuncios patrocinados de otros artículos
+    return None
+
+def extraer_precio(texto, url=""):
     if not texto:
         return None
     texto_unescaped = html.unescape(texto)
+
+    # 1. Extractor especializado para Amazon
+    if url and ("amazon." in url.lower() or "/dp/" in url.lower()):
+        p_amz = extraer_precio_amazon(texto_unescaped)
+        if p_amz is not None:
+            return p_amz
+        return None  # Si Amazon no tiene precio en su buybox/inputs, no inventar con anuncios o carruseles
+
     moneda = r"(?:€|eur(?:os)?)"
     texto_limpio = re.sub(rf"\b(?:under|moins de|sous|menos de|unter|less than|sotto|gifts under|regalos por debajo de|cadeaux de moins de)\s+\d+(?:[.,]\d+)?\s*{moneda}(?!\w)", "", texto_unescaped, flags=re.IGNORECASE)
     texto_limpio = re.sub(rf"\b(?:desde\s+)?\d+(?:[.,]\d+)?\s*{moneda}?\s*(?:/|\s*al\s*|\s*por\s*|\s*cada\s*)?(?:mes|m|month|monat)\b", "", texto_limpio, flags=re.IGNORECASE)
@@ -140,6 +212,7 @@ def extraer_precio(texto):
     texto_limpio = re.sub(rf"\b(?:ahorra|ahorro|descuento|rebaja|save|rabatt|remise|économisez)\s*(?:de|hasta|up to|jusqu'à)?\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)", "", texto_limpio, flags=re.IGNORECASE)
     texto_limpio = re.sub(rf"\b(?:antes|pvp|precio anterior|precio recomendado|was|statt|au lieu de)\s*:\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)", "", texto_limpio, flags=re.IGNORECASE)
 
+    # 2. JSON-LD estructurado
     for m in re.finditer(r'<script[^>]*type=[\'"]application/ld\+json[\'"][^>]*>(.*?)</script>', texto_limpio, re.DOTALL | re.IGNORECASE):
         try:
             datos_ld = json.loads(m.group(1))
@@ -175,6 +248,7 @@ def extraer_precio(texto):
                         except ValueError: pass
         except Exception: pass
 
+    # 3. Metadatos HTML
     m_meta = re.search(r'<meta[^>]+(?:property|name)=[\'"][^\'"]*(?:price:amount|data1|price)[\'"][^>]+content=[\'"]([^\'"]+)[\'"]', texto_limpio, re.IGNORECASE) or re.search(r'<meta[^>]+content=[\'"]([^\'"]+)[\'"][^>]+(?:property|name)=[\'"][^\'"]*(?:price:amount|data1|price)[\'"]', texto_limpio, re.IGNORECASE)
     if m_meta:
         try:
@@ -189,13 +263,7 @@ def extraer_precio(texto):
             if 1 <= p <= 100000: return p
         except ValueError: pass
 
-    m_amazon_buybox = re.search(r'class=[\'"][^\'"]*(?:apex-pricetopay-value|priceToPay|corePriceDisplay)[^\'"]*[\'"][^>]*>.*?<span[^>]*class=[\'"][^\'"]*a-offscreen[^\'"]*[\'"][^>]*>([^<]+)</span>', texto_limpio, re.DOTALL | re.IGNORECASE)
-    if m_amazon_buybox and m_amazon_buybox.group(1).strip():
-        try:
-            p = convertir_numero(m_amazon_buybox.group(1))
-            if 1 <= p <= 100000: return p
-        except ValueError: pass
-
+    # 4. MediaMarkt, PcComponentes, Next.js y JSON de compra
     m_mm = re.search(r'<span[^>]*data-test=[\'"]branded-price[\'"][^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE)
     if m_mm:
         try:
@@ -226,12 +294,17 @@ def extraer_precio(texto):
                 if 1 <= p <= 100000: return p
             except ValueError: pass
 
+    # 5. FALLBACK GENERAL EN TEXTO VISIBLE (Eliminando scripts y estilos para no leer anuncios de JavaScript)
+    texto_sin_scripts = re.sub(r'<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>', '', texto_limpio, flags=re.IGNORECASE)
+    texto_sin_scripts = re.sub(r'<style\b[^<]*(?:(?!</style>)<[^<]*)*</style>', '', texto_sin_scripts, flags=re.IGNORECASE)
+    texto_visible = re.sub(r'<[^>]+>', ' ', texto_sin_scripts)
+
     patrones = [
         r"(\d{1,3}(?:[.,]\d{3})*(?:[.,](?:\d{1,2}|-+|\u2013+))?)\s*(?:\*|\s)*€",
         r"€\s*(\d{1,3}(?:[.,]\d{3})*(?:[.,](?:\d{1,2}|-+|\u2013+))?)",
     ]
     for patron in patrones:
-        for coincidencia in re.finditer(patron, texto_limpio, re.IGNORECASE):
+        for coincidencia in re.finditer(patron, texto_visible, re.IGNORECASE):
             try:
                 precio = convertir_numero(coincidencia.group(1))
                 if 1 <= precio <= 100000: return precio
@@ -837,7 +910,7 @@ async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
                 texto = None
 
         if texto:
-            precio = extraer_precio(texto)
+            precio = extraer_precio(texto, url)
             if precio:
                 titulo = producto["nombre"]
                 m_title = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
@@ -856,7 +929,7 @@ async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
             print(f"   🔄 Fallo/Price missing en {urlparse(url).netloc}. Usando navegador real (Playwright)...")
             html_content, titulo_real = await browser_mgr.get_page_content(url)
             if html_content:
-                precio_pw = extraer_precio(html_content)
+                precio_pw = extraer_precio(html_content, url)
                 if precio_pw:
                     tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
                     return {

@@ -9,6 +9,7 @@ import re
 import sys
 import time
 import random
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
@@ -136,12 +137,13 @@ def extraer_precio_amazon(texto):
         r"""<input[^>]+id=["\x27]twister-plus-price-data-price["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
         r"""<input[^>]+name=["\x27]priceValue["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
         r"""<input[^>]+name=["\x27]items\[0\.base\]\[customerVisiblePrice\]\[amount\]["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
+        r"""<input[^>]+id=["\x27]displayedPrice["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
     ]
     for p in patrones_input:
         m = re.search(p, texto, re.IGNORECASE)
         if m:
             try:
-                val = float(m.group(1).replace(",", "."))
+                val = convertir_numero(m.group(1))
                 if 1 <= val <= 100000: return val
             except ValueError: pass
 
@@ -151,49 +153,66 @@ def extraer_precio_amazon(texto):
         m_amt = re.search(r"""["\x27]priceAmount["\x27]\s*:\s*([\d.]+)""", m_twister.group(1))
         if m_amt:
             try:
-                val = float(m_amt.group(1))
+                val = convertir_numero(m_amt.group(1))
                 if 1 <= val <= 100000: return val
             except ValueError: pass
 
     # 3. Contenedores de precio principal de Amazon (corePrice, apex, buybox)
-    bloques_precio = [
-        r"""id=["\x27](?:corePriceDisplay_desktop_feature_div|corePrice_desktop|apex_desktop|desktop_buybox)["\x27][^>]*>(.*?)</div>\s*</div>""",
-        r"""class=["\x27][^"\x27]*(?:apex-pricetopay-value|priceToPay|corePriceDisplay|reinventPricePriceToPayMargin)[^"\x27]*["\x27][^>]*>(.*?)</span>\s*</span>""",
-    ]
-    for bp in bloques_precio:
-        m_bp = re.search(bp, texto, re.DOTALL | re.IGNORECASE)
-        if m_bp:
-            bloque = m_bp.group(1)
-            m_off = re.search(r"""class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", bloque, re.IGNORECASE)
+    for id_contenedor in ["corePriceDisplay_desktop_feature_div", "corePrice_desktop", "apex_desktop", "desktop_buybox", "buybox", "corePrice_feature_div"]:
+        pos = texto.find(id_contenedor)
+        if pos != -1:
+            snippet = texto[pos:pos+4000]
+            m_off = re.search(r"""class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", snippet, re.IGNORECASE)
             if m_off:
-                clean = re.sub(r"[^\d.,]", "", m_off.group(1).replace(",", "."))
                 try:
-                    val = float(clean)
+                    val = convertir_numero(m_off.group(1))
+                    if 1 <= val <= 100000: return val
+                except ValueError: pass
+            m_whole = re.search(r"""class=["\x27]a-price-whole["\x27]>(\d+).*?class=["\x27]a-price-fraction["\x27]>(\d+)""", snippet, re.DOTALL | re.IGNORECASE)
+            if m_whole:
+                try:
+                    val = float(f"{m_whole.group(1)}.{m_whole.group(2)}")
                     if 1 <= val <= 100000: return val
                 except ValueError: pass
 
-    # 4. Selectores clásicos de Amazon
+    # 4. Clases directas de precio principal (priceToPay, apex-pricetopay-value)
+    for cls in ["priceToPay", "apex-pricetopay-value", "reinventPricePriceToPayMargin"]:
+        pos = texto.find(cls)
+        if pos != -1:
+            snippet = texto[pos:pos+1500]
+            m_off = re.search(r"""class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", snippet, re.IGNORECASE)
+            if m_off:
+                try:
+                    val = convertir_numero(m_off.group(1))
+                    if 1 <= val <= 100000: return val
+                except ValueError: pass
+            m_whole = re.search(r"""class=["\x27]a-price-whole["\x27]>(\d+).*?class=["\x27]a-price-fraction["\x27]>(\d+)""", snippet, re.DOTALL | re.IGNORECASE)
+            if m_whole:
+                try:
+                    val = float(f"{m_whole.group(1)}.{m_whole.group(2)}")
+                    if 1 <= val <= 100000: return val
+                except ValueError: pass
+
+    # 5. Selectores clásicos de Amazon
     m_pb = re.search(r"""id=["\x27](?:priceblock_ourprice|priceblock_dealprice|price_inside_buybox)["\x27][^>]*>([^<]+)</span>""", texto, re.IGNORECASE)
     if m_pb:
-        clean = re.sub(r"[^\d.,]", "", m_pb.group(1).replace(",", "."))
         try:
-            val = float(clean)
+            val = convertir_numero(m_pb.group(1))
             if 1 <= val <= 100000: return val
         except ValueError: pass
 
-    # 5. Ofertas de otros vendedores (OLP)
+    # 6. Ofertas de otros vendedores (OLP)
     m_olp = re.search(r"""href=["\x27][^"\x27]*(?:/gp/offer-listing/|/dp-olp/)[^"\x27]*["\x27][^>]*>.*?<span[^>]*class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", texto, re.DOTALL | re.IGNORECASE)
     if m_olp:
-        clean = re.sub(r"[^\d.,]", "", m_olp.group(1).replace(",", "."))
         try:
-            val = float(clean)
+            val = convertir_numero(m_olp.group(1))
             if 1 <= val <= 100000: return val
         except ValueError: pass
 
     # En Amazon NUNCA usar fallback global para evitar capturar anuncios patrocinados de otros artículos
     return None
 
-def es_articulo_disponible_c2c(texto, url):
+def es_articulo_disponible(texto, url):
     if not texto or not url:
         return True
     texto_lower = texto.lower()
@@ -243,11 +262,15 @@ def es_articulo_disponible_c2c(texto, url):
 
     # 4. AMAZON (Disponibilidad principal)
     if "amazon." in url_lower:
-        if re.search(r'id=["\']availability["\'][^>]*>.*?[\'"]?(?:no disponible por el momento|currently unavailable|temporarily out of stock)[\'"]?', texto_lower, re.DOTALL):
+        patron_amz_no_disp = r'id=["\']availability["\'][^>]*>.*?[\'"]?(?:no disponible|agotado|currently unavailable|out of stock|temporarily out of stock|derzeit nicht verfügbar|nicht auf lager|actuellement indisponible|temporairement en rupture|attualmente non disponibile)[\'"]?'
+        if re.search(patron_amz_no_disp, texto_lower, re.DOTALL):
             if not re.search(r'/gp/offer-listing/|/dp-olp/', texto_lower):
                 return False
 
     return True
+
+# Retrocompatibilidad
+es_articulo_disponible_c2c = es_articulo_disponible
 
 def extraer_precio(texto, url=""):
     if not texto:
@@ -505,6 +528,11 @@ def detectar_condicion(url, titulo="", texto_html=""):
     if any(p in texto_eval for p in palabras_reacondicionado) or any(p in url_lower for p in ["reacondicionado", "renewed", "warehouse", "outlet"]): return "Reacondicionado / Segunda mano"
     return "Nuevo"
 
+def normalizar_texto(texto):
+    if not texto: return ""
+    t = unicodedata.normalize('NFKD', str(texto)).encode('ASCII', 'ignore').decode('utf-8').lower()
+    return t.replace(",", ".")
+
 # ============================================================
 # VALIDACION Y FILTRADO DE RESULTADOS
 # ============================================================
@@ -535,28 +563,34 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
                 if re.search(r'\b' + re.escape(term_clean) + r'\b', texto):
                     return False
 
-    texto_titulo_url = f"{titulo} {url}".lower().replace(",", ".")
-    texto_norm = texto_titulo_url.replace("-", "").replace(" ", "")
+    texto_raw = f"{titulo} {url}".replace(",", ".")
+    texto_titulo_url = normalizar_texto(texto_raw)
+    texto_norm = re.sub(r'[^a-z0-9]', '', texto_titulo_url)
+
     requeridos = producto.get("terminos_requeridos")
     if requeridos:
-        for req in requeridos:
-            req_clean = req.lower().strip()
-            req_norm = req_clean.replace("-", "").replace(" ", "")
-            if req_clean not in texto_titulo_url and req_norm not in texto_norm: return False
+        tokens_a_validar = [str(r) for r in requeridos]
     else:
-        tokens = producto.get("busqueda", "").split()
-        stopwords_cortas = {"de", "en", "el", "la", "un", "al", "da", "di", "in", "of", "to", "at", "zu", "im", "am", "-"}
-        tokens_opcionales = {"2.4", "2.4g", "2.4ghz"}
-        for token in tokens:
-            token_clean = token.lower().strip()
-            if token_clean in stopwords_cortas or token_clean in tokens_opcionales: continue
-            token_norm = token_clean.replace("-", "").replace(" ", "")
-            es_codigo_modelo = bool(re.search(r'[a-z]', token_clean) and re.search(r'\d', token_clean) and len(token_clean) >= 4 and token_clean not in ("8bitdo",))
-            if es_codigo_modelo:
-                modelo_base = token_clean.split("-")[0]
-                if token_clean not in texto_titulo_url and modelo_base not in texto_titulo_url: return False
-            else:
-                if token_clean not in texto_titulo_url and token_norm not in texto_norm: return False
+        tokens_a_validar = producto.get("busqueda", "").split()
+
+    stopwords_cortas = {"de", "del", "en", "el", "la", "los", "las", "un", "una", "al", "da", "di", "in", "of", "for", "with", "to", "at", "zu", "im", "am", "und", "y", "e", "-", "/", "&", "+"}
+
+    for token in tokens_a_validar:
+        token_clean = normalizar_texto(token).strip()
+        if not token_clean or token_clean in stopwords_cortas:
+            continue
+        token_norm = re.sub(r'[^a-z0-9]', '', token_clean)
+        modelo_base = token_clean.split("-")[0]
+        modelo_base_norm = re.sub(r'[^a-z0-9]', '', modelo_base)
+
+        coincide = (
+            token_clean in texto_titulo_url or
+            (token_norm and token_norm in texto_norm) or
+            (modelo_base and modelo_base in texto_titulo_url) or
+            (modelo_base_norm and modelo_base_norm in texto_norm)
+        )
+        if not coincide:
+            return False
 
     capacidad = producto.get("capacidad")
     unidad = producto.get("unidad_medida")
@@ -784,17 +818,10 @@ def generar_consultas(producto, config):
     buscar_europa = config.get("solo_union_europea", True)
     consultas = []
 
-    tokens = busqueda.split()
-    # Detectar códigos de modelo alfanuméricos como WD80EFPX, WD60EFPX, etc. (excluyendo marcas como 8bitdo o conectividad 2.4)
-    modelos = [t for t in tokens if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 4 and t.lower() not in ("8bitdo", "2.4", "2.4g", "2.4ghz")]
-    if modelos:
-        termino = f'"{modelos[0].split("-")[0]}"'
-        termino_c2c = f'"{modelos[0].split("-")[0]}"'
-    else:
-        # Frase limpia sin comillas exactas para no bloquear resultados con pequeñas variaciones de tienda
-        clean = re.sub(r'\s*-\s*', ' ', busqueda).strip()
-        termino = clean
-        termino_c2c = clean
+    # Limpiar guiones o símbolos sueltos de la búsqueda para la consulta al buscador
+    termino = re.sub(r'\s+-\s+', ' ', busqueda).strip()
+    termino = re.sub(r'\s+', ' ', termino)
+    termino_c2c = termino
 
     # Consultas más simples y efectivas para DuckDuckGo
     if buscar_europa:

@@ -34,12 +34,12 @@ jobs:
           pip install -r requirements.txt
           
       - name: Instalar navegadores de Playwright
-        run: playwright install chromium          
+        run: playwright install --with-deps chromium          
 
       - name: Configurar Cloudflare WARP (Evitar bloqueos de IP de datacenter)
         uses: fscarmen/warp-on-actions@v1.4
         with:
-          stack: ipv4
+          stack: dual
           mode: wireguard
 
       - name: Ejecutar monitor

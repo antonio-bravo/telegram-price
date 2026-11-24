@@ -16,8 +16,10 @@ from urllib.parse import urlparse
 # LIBRERÍA CLAVE: Imita la huella digital TLS de Chrome (con fallback seguro)
 try:
     from curl_cffi import requests as curl_requests
+    from curl_cffi.requests import AsyncSession as CurlAsyncSession
 except ImportError:
     curl_requests = None
+    CurlAsyncSession = None
 
 # Mantenemos requests estándar para Telegram y reintentos
 import requests 
@@ -346,24 +348,37 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
     else:
         exclusiones = producto.get("excluir_terminos") if producto.get("excluir_terminos") is not None else config.get("excluir_terminos", TERMINOS_EXCLUSION_DEFECTO)
         for termino in exclusiones:
-            if termino.lower() in texto: return False
+            term_clean = termino.lower().strip()
+            # Si el término es un accesorio común, evitar descartar productos principales que lo incluyan (ej. mandos con cable incluido)
+            if term_clean in ("cable", "funda", "carcasa", "caddy", "dock", "adaptador"):
+                patron_accesorio_solo = rf'\b(?:solo|pack de|para|for|de)\s+{re.escape(term_clean)}\b|^\s*{re.escape(term_clean)}\b'
+                if re.search(patron_accesorio_solo, titulo.lower()):
+                    return False
+            else:
+                if re.search(r'\b' + re.escape(term_clean) + r'\b', texto):
+                    return False
 
-    texto_titulo_url = f"{titulo} {url}".lower()
+    texto_titulo_url = f"{titulo} {url}".lower().replace(",", ".")
+    texto_norm = texto_titulo_url.replace("-", "").replace(" ", "")
     requeridos = producto.get("terminos_requeridos")
     if requeridos:
         for req in requeridos:
-            if req.lower() not in texto: return False
+            req_clean = req.lower().strip()
+            req_norm = req_clean.replace("-", "").replace(" ", "")
+            if req_clean not in texto_titulo_url and req_norm not in texto_norm: return False
     else:
         tokens = producto.get("busqueda", "").split()
+        stopwords_cortas = {"de", "en", "el", "la", "un", "al", "da", "di", "in", "of", "to", "at", "zu", "im", "am", "-"}
         for token in tokens:
             token_clean = token.lower().strip()
-            if len(token_clean) < 3: continue
-            es_codigo_modelo = bool(re.search(r'[a-z]', token_clean) and re.search(r'\d', token_clean) and len(token_clean) >= 4)
+            if token_clean in stopwords_cortas: continue
+            token_norm = token_clean.replace("-", "").replace(" ", "")
+            es_codigo_modelo = bool(re.search(r'[a-z]', token_clean) and re.search(r'\d', token_clean) and len(token_clean) >= 4 and token_clean not in ("8bitdo",))
             if es_codigo_modelo:
                 modelo_base = token_clean.split("-")[0]
                 if token_clean not in texto_titulo_url and modelo_base not in texto_titulo_url: return False
             else:
-                if token_clean not in texto: return False
+                if token_clean not in texto_titulo_url and token_norm not in texto_norm: return False
 
     capacidad = producto.get("capacidad")
     unidad = producto.get("unidad_medida")
@@ -592,21 +607,28 @@ def generar_consultas(producto, config):
     consultas = []
 
     tokens = busqueda.split()
-    modelos = [t for t in tokens if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 5]
-    termino = modelos[0].split("-")[0] if modelos else busqueda
-    termino_c2c = modelos[0] if modelos else busqueda
+    # Detectar códigos de modelo alfanuméricos como WD80EFPX, WD60EFPX, etc. (excluyendo marcas como 8bitdo o conectividad 2.4)
+    modelos = [t for t in tokens if re.search(r"[A-Za-z]", t) and re.search(r"\d", t) and len(t) >= 4 and t.lower() not in ("8bitdo", "2.4", "2.4g", "2.4ghz")]
+    if modelos:
+        termino = f'"{modelos[0].split("-")[0]}"'
+        termino_c2c = f'"{modelos[0].split("-")[0]}"'
+    else:
+        # Frase limpia sin comillas exactas para no bloquear resultados con pequeñas variaciones de tienda
+        clean = re.sub(r'\s*-\s*', ' ', busqueda).strip()
+        termino = clean
+        termino_c2c = clean
 
     # Consultas más simples y efectivas para DuckDuckGo
     if buscar_europa:
-        consultas.append((f'"{termino}" site:amazon.de OR site:amazon.it OR site:amazon.es', "es-es"))
-        consultas.append((f'"{termino}" site:idealo.de OR site:idealo.es OR site:geizhals.de OR site:guenstiger.de', "es-es"))
-        consultas.append((f'"{termino}" site:pccomponentes.com OR site:mediamarkt.es OR site:mediamarkt.de', "es-es"))
+        consultas.append((f'{termino} site:amazon.de OR site:amazon.it OR site:amazon.es', "es-es"))
+        consultas.append((f'{termino} site:idealo.de OR site:idealo.es OR site:geizhals.de OR site:guenstiger.de', "es-es"))
+        consultas.append((f'{termino} site:pccomponentes.com OR site:mediamarkt.es OR site:mediamarkt.de', "es-es"))
     
     if config.get("incluir_wallapop_vinted", True):
-        consultas.append((f'"{termino_c2c}" site:wallapop.com OR site:vinted.es -vendido -reservado ("€" OR "EUR")', "es-es"))
+        consultas.append((f'{termino_c2c} site:wallapop.com OR site:vinted.es -vendido -reservado ("€" OR "EUR")', "es-es"))
     
     # Consulta general de respaldo
-    consultas.append((f'"{termino}" precio OR price OR preis ("€" OR "EUR")', "es-es"))
+    consultas.append((f'{termino} precio OR price OR preis ("€" OR "EUR")', "es-es"))
 
     vistos = set()
     return [(c, reg) for c, reg in consultas if c not in vistos and not vistos.add(c)]
@@ -666,6 +688,15 @@ def es_url_producto_valida(url, domain=None):
         else:
             domain = domain.lower().removeprefix("www.")
 
+        dominios_no_tienda = [
+            "support.", "techcommunity.", "answers.", "wikipedia.org",
+            "youtube.com", "reddit.com", "twitter.com", "facebook.com",
+            "instagram.com", "tiktok.com", "vuelos.", "fluege.", "flights.",
+            "specials.", "newsletter."
+        ]
+        if any(no_tienda in domain for no_tienda in dominios_no_tienda):
+            return False
+
         # Descartar páginas de búsqueda, categorías, login, carrito, etc.
         patrones_no_producto = [
             "/search", "/suche", "/buscar", "/recherche", "/zoek",
@@ -724,6 +755,8 @@ class BrowserManager:
         self.playwright = None
         self.browser = None
         self.disponible = False
+        # Limitar concurrencia estricta a 2 páginas para no saturar CPU en GitHub Actions
+        self.semaphore = asyncio.Semaphore(2)
 
     async def start(self):
         try:
@@ -737,8 +770,7 @@ class BrowserManager:
             print("✅ Motor de navegador (Playwright) iniciado correctamente.")
         except Exception as e:
             print(f"⚠️ Playwright no disponible o falló al iniciar: {e}")
-            print("   ℹ️ Se usará únicamente el método de petición rápida (aiohttp).")
-            print("   ℹ️ Para activar Playwright en GitHub Actions, añade 'run: playwright install chromium' en tu workflow .yml")
+            print("   ℹ️ Se usará únicamente el método de petición rápida.")
             self.disponible = False
 
     async def stop(self):
@@ -750,80 +782,102 @@ class BrowserManager:
     async def get_page_content(self, url):
         if not self.disponible or not self.browser:
             return None, None
-        context = await self.browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            locale="es-ES",
-            timezone_id="Europe/Madrid",
-            viewport={'width': 1920, 'height': 1080}
-        )
-        page = await context.new_page()
-        try:
-            # Ocultar indicador automatizado de Playwright
-            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
-            # Usar domcontentloaded para evitar timeouts por scripts de analítica continua (networkidle)
-            await page.goto(url, wait_until='domcontentloaded', timeout=15000)
-            await asyncio.sleep(1.5)
-            return await page.content(), await page.title()
-        except Exception:
-            return None, None
-        finally:
-            await context.close()
+        async with self.semaphore:
+            context = await self.browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                locale="es-ES",
+                timezone_id="Europe/Madrid",
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = await context.new_page()
+            try:
+                # Bloquear descargas pesadas (imágenes, medios, fuentes) para carga ultrarrápida y evitar timeouts
+                await page.route(
+                    "**/*",
+                    lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_()
+                )
+                await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+                await page.goto(url, wait_until='domcontentloaded', timeout=25000)
+                await asyncio.sleep(1.5)
+                return await page.content(), await page.title()
+            except Exception as e:
+                print(f"   ⚠️ Playwright falló en {urlparse(url).netloc}: {type(e).__name__} ({e})")
+                return None, None
+            finally:
+                await context.close()
 
 async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
     async with semaphore:
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-            }
-            timeout = aiohttp.ClientTimeout(total=10)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, headers=headers, allow_redirects=True) as response:
-                    if response.status == 200:
-                        texto = await response.text(errors="replace")
-                        precio = extraer_precio(texto)
-                        if precio:
-                            titulo = producto["nombre"]
-                            m_title = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
-                            if m_title: titulo = html.unescape(m_title.group(1)).strip()
-                            tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
-                            return {
-                                "producto_id": producto["id"], "producto": producto["nombre"],
-                                "tienda": urlparse(url).netloc.lower().removeprefix("www."),
-                                "tienda_nombre": tienda_nombre, "pais": pais, "es_internacional": es_inter,
-                                "precio": precio, "envio": extraer_envio(texto), "url": url,
-                                "titulo": titulo, "condicion": detectar_condicion(url, titulo, texto),
-                            }
-                    
-                    # 2. FALLBACK: Si falla o no encuentra precio, usamos Playwright (SOLO si está disponible)
-                    if browser_mgr.disponible:
-                        print(f"   🔄 Fallo/Price missing en {urlparse(url).netloc}. Usando navegador real (Playwright)...")
-                        html_content, titulo_real = await browser_mgr.get_page_content(url)
-                        if html_content:
-                            precio_pw = extraer_precio(html_content)
-                            if precio_pw:
-                                tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
-                                return {
-                                    "producto_id": producto["id"], "producto": producto["nombre"],
-                                    "tienda": urlparse(url).netloc.lower().removeprefix("www."),
-                                    "tienda_nombre": tienda_nombre, "pais": pais, "es_internacional": es_inter,
-                                    "precio": precio_pw, "envio": extraer_envio(html_content), "url": url,
-                                    "titulo": titulo_real or producto["nombre"],
-                                    "condicion": detectar_condicion(url, titulo_real, html_content),
-                                }
-                    else:
-                        print(f"   ⚠️ No se pudo extraer el precio en {urlparse(url).netloc} (Playwright no disponible en este entorno).")
-                    return None
-        except Exception as e:
-            print(f"   ⚠️ Error en {urlparse(url).netloc}: {e}")
-            return None
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        }
+        texto = None
+
+        # 1. Petición rápida con curl_cffi (imita huella TLS de Chrome para saltar bloqueos de Cloudflare/Amazon)
+        if CurlAsyncSession is not None:
+            try:
+                async with CurlAsyncSession(impersonate="chrome124", timeout=12) as c_session:
+                    resp = await c_session.get(url, headers=headers)
+                    if resp.status_code == 200:
+                        texto = resp.text
+            except Exception:
+                texto = None
+
+        # Fallback de petición rápida con aiohttp si curl_cffi no estaba disponible o dio error
+        if not texto:
+            try:
+                timeout = aiohttp.ClientTimeout(total=10)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers=headers, allow_redirects=True) as response:
+                        if response.status == 200:
+                            texto = await response.text(errors="replace")
+            except Exception:
+                texto = None
+
+        if texto:
+            precio = extraer_precio(texto)
+            if precio:
+                titulo = producto["nombre"]
+                m_title = re.search(r'<title[^>]*>(.*?)</title>', texto, re.IGNORECASE | re.DOTALL)
+                if m_title: titulo = html.unescape(m_title.group(1)).strip()
+                tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
+                return {
+                    "producto_id": producto["id"], "producto": producto["nombre"],
+                    "tienda": urlparse(url).netloc.lower().removeprefix("www."),
+                    "tienda_nombre": tienda_nombre, "pais": pais, "es_internacional": es_inter,
+                    "precio": precio, "envio": extraer_envio(texto), "url": url,
+                    "titulo": titulo, "condicion": detectar_condicion(url, titulo, texto),
+                }
+
+        # 2. FALLBACK Playwright si la petición HTTP directa no devolvió precio
+        if browser_mgr.disponible:
+            print(f"   🔄 Fallo/Price missing en {urlparse(url).netloc}. Usando navegador real (Playwright)...")
+            html_content, titulo_real = await browser_mgr.get_page_content(url)
+            if html_content:
+                precio_pw = extraer_precio(html_content)
+                if precio_pw:
+                    tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)
+                    return {
+                        "producto_id": producto["id"], "producto": producto["nombre"],
+                        "tienda": urlparse(url).netloc.lower().removeprefix("www."),
+                        "tienda_nombre": tienda_nombre, "pais": pais, "es_internacional": es_inter,
+                        "precio": precio_pw, "envio": extraer_envio(html_content), "url": url,
+                        "titulo": titulo_real or producto["nombre"],
+                        "condicion": detectar_condicion(url, titulo_real, html_content),
+                    }
+                else:
+                    print(f"   ℹ️ Playwright cargó {urlparse(url).netloc} ({len(html_content)} bytes), pero no detectó precio.")
+        else:
+            print(f"   ⚠️ No se pudo extraer el precio en {urlparse(url).netloc} (Playwright no disponible en este entorno).")
+        return None
 
 async def buscar_producto_async(producto, pais_default, config, browser_mgr):
     consultas = generar_consultas(producto, config)
     resultados = []
     vistos = set()
-    semaphore = asyncio.Semaphore(5) # Máximo 5 peticiones simultáneas
+    semaphore = asyncio.Semaphore(3) # Máximo 3 peticiones simultáneas por producto
 
     # 1. Procesar URLs fijas en paralelo
     urls_fijas = []
@@ -834,9 +888,13 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
         tasks = [consultar_url_async(u, producto, config, browser_mgr, semaphore) for u in urls_fijas]
         resultados_fijos = await asyncio.gather(*tasks, return_exceptions=True)
         for res in resultados_fijos:
-            if isinstance(res, dict) and res and es_resultado_valido(producto, res["titulo"], "", res["precio"], config, res["url"]):
-                resultados.append(res)
-                vistos.add(res["url"])
+            if isinstance(res, dict) and res:
+                if es_resultado_valido(producto, res["titulo"], "", res["precio"], config, res["url"]):
+                    print(f"   🎯 Oferta fija válida [{producto['nombre']}]: {res['precio']:.2f} € en {res['tienda_nombre']} -> {res['titulo'][:60]}")
+                    resultados.append(res)
+                    vistos.add(res["url"])
+                else:
+                    print(f"   🚫 Descartada URL fija [{producto['nombre']}]: '{res['titulo'][:50]}' ({res['precio']:.2f} € en {res['tienda_nombre']})")
 
     # 2. Búsqueda DuckDuckGo con FILTRADO ESTRICTO ANTES DE SCRAPEAR
     try:
@@ -874,8 +932,10 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                     # FILTRO 4: Validación estricta de URL de producto (usa tu función existente)
                     if not es_url_producto_valida(url, domain): continue
                     
-                    # FILTRO 5: Solo permitir dominios que sean tiendas UE o marketplaces conocidos
-                    if not es_tienda_ue(url) and not any(x in domain for x in ["amazon.", "wallapop", "vinted", "ebay"]):
+                    # FILTRO 5: Solo permitir dominios de la UE si la opción está activa
+                    if config.get("solo_union_europea", True):
+                        if not es_tienda_ue(url): continue
+                    elif not es_tienda_ue(url) and not any(x in domain for x in ["amazon.", "wallapop", "vinted", "ebay"]):
                         continue
 
                     tasks_ddg.append(consultar_url_async(url, producto, config, browser_mgr, semaphore))
@@ -885,8 +945,11 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                     for res in resultados_ddg:
                         if isinstance(res, dict) and res and res["url"] not in vistos:
                             if es_resultado_valido(producto, res["titulo"], "", res["precio"], config, res["url"]):
+                                print(f"   🎯 Oferta válida [{producto['nombre']}]: {res['precio']:.2f} € en {res['tienda_nombre']} -> {res['titulo'][:60]}")
                                 resultados.append(res)
                                 vistos.add(res["url"])
+                            else:
+                                print(f"   🚫 Descartado por filtro [{producto['nombre']}]: '{res['titulo'][:50]}' ({res['precio']:.2f} € en {res['tienda_nombre']})")
                                 
     except Exception as error:
         print(f"Error general en buscador para '{producto['nombre']}': {error}")

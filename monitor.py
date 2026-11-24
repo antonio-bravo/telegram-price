@@ -193,6 +193,62 @@ def extraer_precio_amazon(texto):
     # En Amazon NUNCA usar fallback global para evitar capturar anuncios patrocinados de otros artículos
     return None
 
+def es_articulo_disponible_c2c(texto, url):
+    if not texto or not url:
+        return True
+    texto_lower = texto.lower()
+    url_lower = url.lower()
+
+    # 1. WALLAPOP
+    if "wallapop.com" in url_lower:
+        if '"httpcode":404' in texto_lower or '"httpcode": 404' in texto_lower or "no hemos encontrado lo que buscas" in texto_lower:
+            return False
+        patrones_wallapop_sold = [
+            r'["\']sold["\']\s*:\s*true',
+            r'["\']reserved["\']\s*:\s*true',
+            r'["\']status["\']\s*:\s*["\'](?:sold|reserved|expired|deleted|not_available)["\']',
+            r'class=["\'][^"\']*(?:itemdetailstatus|badge|status)[^"\']*["\'][^>]*>\s*(?:vendido|reservado|sold|reserved)\s*<',
+            r'<button[^>]*disabled[^>]*>.*?(?:reservado|vendido).*?</button>',
+            r'\b(?:este producto ya se ha vendido|artículo no disponible|producto no disponible)\b',
+        ]
+        for p in patrones_wallapop_sold:
+            if re.search(p, texto_lower):
+                return False
+        return True
+
+    # 2. VINTED
+    if "vinted." in url_lower:
+        patrones_vinted_sold = [
+            r'["\']is_closed["\']\s*:\s*true',
+            r'["\']is_reserved["\']\s*:\s*true',
+            r'["\']status["\']\s*:\s*["\'](?:sold|closed)["\']',
+            r'data-testid=["\']item-status["\'][^>]*>\s*(?:vendido|vendu|sold|verkauft|venduto)\s*<',
+            r'\b(?:este artículo está vendido|este artículo está reservado|cet article est vendu|this item is sold)\b',
+        ]
+        for p in patrones_vinted_sold:
+            if re.search(p, texto_lower):
+                return False
+        return True
+
+    # 3. EBAY
+    if "ebay." in url_lower:
+        patrones_ebay_sold = [
+            r'\b(?:este artículo se ha vendido|el anuncio ha finalizado|este anuncio ha finalizado|this listing was ended|this item is out of stock)\b',
+            r'class=["\'][^"\']*(?:ended-status|status-banner)[^"\']*["\'][^>]*>(?:finalizado|vendido|ended|sold)',
+        ]
+        for p in patrones_ebay_sold:
+            if re.search(p, texto_lower):
+                return False
+        return True
+
+    # 4. AMAZON (Disponibilidad principal)
+    if "amazon." in url_lower:
+        if re.search(r'id=["\']availability["\'][^>]*>.*?[\'"]?(?:no disponible por el momento|currently unavailable|temporarily out of stock)[\'"]?', texto_lower, re.DOTALL):
+            if not re.search(r'/gp/offer-listing/|/dp-olp/', texto_lower):
+                return False
+
+    return True
+
 def extraer_precio(texto, url=""):
     if not texto:
         return None
@@ -205,6 +261,50 @@ def extraer_precio(texto, url=""):
             return p_amz
         return None  # Si Amazon no tiene precio en su buybox/inputs, no inventar con anuncios o carruseles
 
+    # 2. Extractor especializado para Wallapop
+    if url and "wallapop.com" in url.lower():
+        # JSON en __NEXT_DATA__
+        m_w_json = re.search(r'["\']price["\']\s*:\s*\{[^}]*?["\']amount["\']\s*:\s*([\d.]+)', texto_unescaped)
+        if m_w_json:
+            try:
+                p = float(m_w_json.group(1))
+                if 1 <= p <= 100000: return p
+            except ValueError: pass
+        # En el título de la página (ej: 'por 319,95 EUR' o 'per 319,95 EUR')
+        m_w_title = re.search(r'(?:por|per|for|pour)\s*([\d.,]+)\s*(?:€|eur)\b', texto_unescaped, re.IGNORECASE)
+        if m_w_title:
+            try:
+                p = float(m_w_title.group(1).replace(",", "."))
+                if 1 <= p <= 100000: return p
+            except ValueError: pass
+        # Elemento DOM de precio
+        m_w_dom = re.search(r'class=["\'][^"\']*(?:itemprice|item-detail-price)[^"\']*["\'][^>]*>.*?([\d.,]+)\s*€', texto_unescaped, re.DOTALL | re.IGNORECASE)
+        if m_w_dom:
+            try:
+                p = float(m_w_dom.group(1).replace(",", "."))
+                if 1 <= p <= 100000: return p
+            except ValueError: pass
+
+    # 3. Extractor especializado para PcComponentes
+    if url and "pccomponentes.com" in url.lower():
+        m_pcc = re.search(r'id=["\']pdp-price["\'][^>]*>([^\x3c]+)</span>', texto_unescaped, re.IGNORECASE) or re.search(r'id=["\']precio-main["\'][^>]*>.*?<span[^>]*>([^\x3c]+)</span>', texto_unescaped, re.DOTALL | re.IGNORECASE) or re.search(r'data-price=["\']([\d.,]+)["\']', texto_unescaped, re.IGNORECASE)
+        if m_pcc:
+            try:
+                clean = re.sub(r"[^\d.,]", "", m_pcc.group(1).replace(",", "."))
+                p = float(clean)
+                if 1 <= p <= 100000: return p
+            except ValueError: pass
+
+    # 4. Extractor especializado para Geizhals y Guenstiger
+    if url and any(x in url.lower() for x in ["geizhals.", "guenstiger."]):
+        m_gh = re.search(r'class=["\'][^"\']*(?:gh_price|notrans|offer__price|price-tag)[^"\']*["\'][^>]*>.*?([\d.,]+)\s*€', texto_unescaped, re.DOTALL | re.IGNORECASE) or re.search(r'(?:ab|desde)\s*(?:€\s*)?([\d.,]+)\s*(?:€)?', texto_unescaped, re.IGNORECASE)
+        if m_gh:
+            try:
+                clean = re.sub(r"[^\d.,]", "", m_gh.group(1).replace(",", "."))
+                val = float(clean)
+                if 1 <= val <= 100000: return val
+            except ValueError: pass
+
     moneda = r"(?:€|eur(?:os)?)"
     texto_limpio = re.sub(rf"\b(?:under|moins de|sous|menos de|unter|less than|sotto|gifts under|regalos por debajo de|cadeaux de moins de)\s+\d+(?:[.,]\d+)?\s*{moneda}(?!\w)", "", texto_unescaped, flags=re.IGNORECASE)
     texto_limpio = re.sub(rf"\b(?:desde\s+)?\d+(?:[.,]\d+)?\s*{moneda}?\s*(?:/|\s*al\s*|\s*por\s*|\s*cada\s*)?(?:mes|m|month|monat)\b", "", texto_limpio, flags=re.IGNORECASE)
@@ -212,7 +312,7 @@ def extraer_precio(texto, url=""):
     texto_limpio = re.sub(rf"\b(?:ahorra|ahorro|descuento|rebaja|save|rabatt|remise|économisez)\s*(?:de|hasta|up to|jusqu'à)?\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)", "", texto_limpio, flags=re.IGNORECASE)
     texto_limpio = re.sub(rf"\b(?:antes|pvp|precio anterior|precio recomendado|was|statt|au lieu de)\s*:\s*\d+(?:[.,]\d+)?\s*{moneda}(?!\w)", "", texto_limpio, flags=re.IGNORECASE)
 
-    # 2. JSON-LD estructurado
+    # 5. JSON-LD estructurado
     for m in re.finditer(r'<script[^>]*type=[\'"]application/ld\+json[\'"][^>]*>(.*?)</script>', texto_limpio, re.DOTALL | re.IGNORECASE):
         try:
             datos_ld = json.loads(m.group(1))
@@ -248,7 +348,7 @@ def extraer_precio(texto, url=""):
                         except ValueError: pass
         except Exception: pass
 
-    # 3. Metadatos HTML
+    # 6. Metadatos HTML
     m_meta = re.search(r'<meta[^>]+(?:property|name)=[\'"][^\'"]*(?:price:amount|data1|price)[\'"][^>]+content=[\'"]([^\'"]+)[\'"]', texto_limpio, re.IGNORECASE) or re.search(r'<meta[^>]+content=[\'"]([^\'"]+)[\'"][^>]+(?:property|name)=[\'"][^\'"]*(?:price:amount|data1|price)[\'"]', texto_limpio, re.IGNORECASE)
     if m_meta:
         try:
@@ -263,7 +363,7 @@ def extraer_precio(texto, url=""):
             if 1 <= p <= 100000: return p
         except ValueError: pass
 
-    # 4. MediaMarkt, PcComponentes, Next.js y JSON de compra
+    # 7. MediaMarkt, PcComponentes, Next.js y JSON de compra
     m_mm = re.search(r'<span[^>]*data-test=[\'"]branded-price[\'"][^>]*>([^<]+)</span>', texto_limpio, re.IGNORECASE)
     if m_mm:
         try:
@@ -294,7 +394,7 @@ def extraer_precio(texto, url=""):
                 if 1 <= p <= 100000: return p
             except ValueError: pass
 
-    # 5. FALLBACK GENERAL EN TEXTO VISIBLE (Eliminando scripts y estilos para no leer anuncios de JavaScript)
+    # 8. FALLBACK GENERAL EN TEXTO VISIBLE (Eliminando scripts y estilos para no leer anuncios de JavaScript)
     texto_sin_scripts = re.sub(r'<script\b[^<]*(?:(?!</script>)<[^<]*)*</script>', '', texto_limpio, flags=re.IGNORECASE)
     texto_sin_scripts = re.sub(r'<style\b[^<]*(?:(?!</style>)<[^<]*)*</style>', '', texto_sin_scripts, flags=re.IGNORECASE)
     texto_visible = re.sub(r'<[^>]+>', ' ', texto_sin_scripts)
@@ -350,6 +450,7 @@ def es_tienda_ue(url):
     domain = urlparse(url).netloc.lower().removeprefix("www.")
     if any(ign in domain for ign in DOMINIOS_IGNORADOS): return False
     if domain.endswith(DOMINIOS_FUERA_UE) or any(d in domain for d in DOMINIOS_FUERA_UE): return False
+    if domain.startswith(("uk.", "us.", "ca.", "au.")): return False
     partes = domain.split(".")
     tld = partes[-1] if partes else ""
     if tld in PAISES_UE_TLD: return True
@@ -358,7 +459,10 @@ def es_tienda_ue(url):
 
 def detectar_tienda_y_pais(url):
     domain = urlparse(url).netloc.lower().removeprefix("www.")
-    if "wallapop" in domain: return "Wallapop", "🇪🇸 Wallapop (2ª mano)", False
+    if "wallapop" in domain:
+        if domain.startswith("it."): return "Wallapop", "🇮🇹 Wallapop Italia (2ª mano)", True
+        if domain.startswith("pt."): return "Wallapop", "🇵🇹 Wallapop Portugal (2ª mano)", True
+        return "Wallapop", "🇪🇸 Wallapop (2ª mano)", False
     if "vinted" in domain: return "Vinted", "🇪🇺 Vinted (2ª mano)", True
     if "amazon.es" in domain: return "Amazon España", "🇪🇸 España", False
     if "amazon.de" in domain: return "Amazon Alemania", "🇩🇪 Alemania", True
@@ -442,9 +546,10 @@ def es_resultado_valido(producto, titulo, descripcion, precio, config, url=""):
     else:
         tokens = producto.get("busqueda", "").split()
         stopwords_cortas = {"de", "en", "el", "la", "un", "al", "da", "di", "in", "of", "to", "at", "zu", "im", "am", "-"}
+        tokens_opcionales = {"2.4", "2.4g", "2.4ghz"}
         for token in tokens:
             token_clean = token.lower().strip()
-            if token_clean in stopwords_cortas: continue
+            if token_clean in stopwords_cortas or token_clean in tokens_opcionales: continue
             token_norm = token_clean.replace("-", "").replace(" ", "")
             es_codigo_modelo = bool(re.search(r'[a-z]', token_clean) and re.search(r'\d', token_clean) and len(token_clean) >= 4 and token_clean not in ("8bitdo",))
             if es_codigo_modelo:
@@ -910,6 +1015,9 @@ async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
                 texto = None
 
         if texto:
+            if not es_articulo_disponible_c2c(texto, url):
+                print(f"   🚫 Artículo no disponible o ya vendido en {urlparse(url).netloc}: {url}")
+                return None
             precio = extraer_precio(texto, url)
             if precio:
                 titulo = producto["nombre"]
@@ -929,6 +1037,9 @@ async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
             print(f"   🔄 Fallo/Price missing en {urlparse(url).netloc}. Usando navegador real (Playwright)...")
             html_content, titulo_real = await browser_mgr.get_page_content(url)
             if html_content:
+                if not es_articulo_disponible_c2c(html_content, url):
+                    print(f"   🚫 Artículo no disponible o ya vendido en {urlparse(url).netloc}: {url}")
+                    return None
                 precio_pw = extraer_precio(html_content, url)
                 if precio_pw:
                     tienda_nombre, pais, es_inter = detectar_tienda_y_pais(url)

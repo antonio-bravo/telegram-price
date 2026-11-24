@@ -36,6 +36,12 @@ jobs:
       - name: Instalar navegadores de Playwright
         run: playwright install chromium          
 
+      - name: Configurar Cloudflare WARP (Evitar bloqueos de IP de datacenter)
+        uses: fscarmen/warp-on-actions@v1.4
+        with:
+          stack: ipv4
+          mode: wireguard
+
       - name: Ejecutar monitor
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || secrets.BOT_TOKEN || secrets.bot_token || secrets.telegram_bot_token }}

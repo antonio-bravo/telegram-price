@@ -752,11 +752,17 @@ class BrowserManager:
             return None, None
         context = await self.browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale="es-ES",
+            timezone_id="Europe/Madrid",
             viewport={'width': 1920, 'height': 1080}
         )
         page = await context.new_page()
         try:
-            await page.goto(url, wait_until='networkidle', timeout=15000)
+            # Ocultar indicador automatizado de Playwright
+            await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+            # Usar domcontentloaded para evitar timeouts por scripts de analítica continua (networkidle)
+            await page.goto(url, wait_until='domcontentloaded', timeout=15000)
+            await asyncio.sleep(1.5)
             return await page.content(), await page.title()
         except Exception:
             return None, None
@@ -775,7 +781,7 @@ async def consultar_url_async(url, producto, config, browser_mgr, semaphore):
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.get(url, headers=headers, allow_redirects=True) as response:
                     if response.status == 200:
-                        texto = await response.text()
+                        texto = await response.text(errors="replace")
                         precio = extraer_precio(texto)
                         if precio:
                             titulo = producto["nombre"]
@@ -853,8 +859,13 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                     # FILTRO 1: Dominios ignorados (buscadores, publicidad)
                     if any(ign in domain for ign in DOMINIOS_IGNORADOS): continue
                     
-                    # FILTRO 2: Dominios que NO son tiendas (evita support.microsoft.com, wikipedia, foros, etc.)
-                    dominios_no_tienda = ["support.", "techcommunity.", "answers.", "wikipedia.org", "youtube.com", "reddit.com", "twitter.com", "facebook.com", "instagram.com", "tiktok.com"]
+                    # FILTRO 2: Dominios que NO son tiendas (evita support, wikipedia, foros, vuelos, promociones, etc.)
+                    dominios_no_tienda = [
+                        "support.", "techcommunity.", "answers.", "wikipedia.org",
+                        "youtube.com", "reddit.com", "twitter.com", "facebook.com",
+                        "instagram.com", "tiktok.com", "vuelos.", "fluege.", "flights.",
+                        "specials.", "newsletter."
+                    ]
                     if any(no_tienda in domain for no_tienda in dominios_no_tienda): continue
                     
                     # FILTRO 3: URLs ya vistas

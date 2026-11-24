@@ -655,6 +655,55 @@ def clave_deduplicacion_url(url):
     except Exception:
         return url
 
+def es_url_producto_valida(url, domain=None):
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+        if not domain:
+            domain = parsed.netloc.lower().removeprefix("www.")
+        else:
+            domain = domain.lower().removeprefix("www.")
+
+        # Descartar páginas de búsqueda, categorías, login, carrito, etc.
+        patrones_no_producto = [
+            "/search", "/suche", "/buscar", "/recherche", "/zoek",
+            "/category/", "/categoria/", "/kategorie/", "/categories/",
+            "/cart", "/carrito", "/warenkorb", "/panier", "/basket",
+            "/checkout", "/account", "/cuenta", "/login", "/signin",
+            "/help", "/ayuda", "/faq", "/terms", "/privacy", "/privacidad",
+            "/blog", "/news", "/noticias", "/forum", "/foro", "/community"
+        ]
+        if any(p in path for p in patrones_no_producto):
+            return False
+
+        # Descartar páginas raíz o sin ruta
+        if path in ("", "/"):
+            return False
+
+        # Validaciones específicas por marketplace/tienda
+        if "amazon." in domain:
+            return bool(re.search(r'/(?:dp|gp/product)/[A-Z0-9]{10}', parsed.path, re.IGNORECASE))
+
+        if "wallapop.com" in domain:
+            return "/item/" in path and bool(re.search(r'/item/(?:.*-)?\d+', path))
+
+        if "vinted." in domain:
+            return "/items/" in path and bool(re.search(r'/items/\d+', path))
+
+        if "ebay." in domain:
+            return "/itm/" in path
+
+        if "idealo." in domain:
+            if "/preisvergleich/liste/" in path:
+                return False
+            return True
+
+        return True
+    except Exception:
+        return False
+
 def es_entorno_datacenter():
     modo_res = os.getenv("MODO_RESIDENCIAL", "").strip().lower()
     if modo_res in ["true", "1", "si", "yes"]: return False

@@ -830,10 +830,10 @@ def generar_consultas(producto, config):
         consultas.append((f'{termino} site:pccomponentes.com OR site:mediamarkt.es OR site:mediamarkt.de', "es-es"))
     
     if config.get("incluir_wallapop_vinted", True):
-        consultas.append((f'{termino_c2c} site:wallapop.com OR site:vinted.es -vendido -reservado ("€" OR "EUR")', "es-es"))
+        consultas.append((f'{termino_c2c} site:wallapop.com OR site:vinted.es -vendido -reservado', "es-es"))
     
     # Consulta general de respaldo
-    consultas.append((f'{termino} precio OR price OR preis ("€" OR "EUR")', "es-es"))
+    consultas.append((f'{termino} precio OR price OR preis', "es-es"))
 
     vistos = set()
     return [(c, reg) for c, reg in consultas if c not in vistos and not vistos.add(c)]
@@ -1147,6 +1147,14 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                     if config.get("solo_union_europea", True):
                         if not es_tienda_ue(url): continue
                     elif not es_tienda_ue(url) and not any(x in domain for x in ["amazon.", "wallapop", "vinted", "ebay"]):
+                        continue
+
+                    # FILTRO 6: Pre-descarte si el resultado de DDG no contiene ninguna palabra clave del producto
+                    ddg_texto = normalizar_texto(f"{res.get('title', '')} {url}")
+                    tokens_busqueda = [normalizar_texto(t).strip() for t in producto.get("busqueda", "").split()]
+                    stopwords_pre = {"de", "del", "en", "el", "la", "los", "las", "un", "una", "al", "da", "di", "in", "of", "for", "with", "to", "at", "zu", "im", "am", "und", "y", "e", "-", "/", "&", "+"}
+                    tokens_relevantes = [t for t in tokens_busqueda if t and t not in stopwords_pre and len(t) >= 3]
+                    if tokens_relevantes and not any(t in ddg_texto for t in tokens_relevantes):
                         continue
 
                     tasks_ddg.append(consultar_url_async(url, producto, config, browser_mgr, semaphore))

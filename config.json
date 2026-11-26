@@ -5,11 +5,11 @@
   "solo_union_europea": true,
   "incluir_wallapop_vinted": true,
   "ignorar_vendidos": true,
-  "envio_wallapop_vinted_estimado": 4.50,
-  "envio_europa_estimado": 6.50,
+  "envio_wallapop_vinted_estimado": 4.5,
+  "envio_europa_estimado": 6.5,
   "incluir_envio": true,
   "exigir_envio_confirmado": false,
-  "envio_por_defecto": 4.50,
+  "envio_por_defecto": 4.5,
   "notificar_bajadas": true,
   "solo_nuevas_ofertas": true,
   "productos": [
@@ -35,7 +35,7 @@
       "precio_maximo_pedido": null,
       "precio_maximo_por_unidad_medida": null,
       "cantidad": 1,
-      "activo": false
+      "activo": true
     },
     {
       "id": "8BitDo-64",
@@ -48,8 +48,8 @@
       "precio_maximo_por_unidad_medida": null,
       "cantidad": 1,
       "activo": true
-    }
-    ,{
+    },
+    {
       "id": "Retrobit-Saturn",
       "nombre": "Retrobit - Sega Saturn",
       "busqueda": "Retrobit - Sega Saturn 2.4",

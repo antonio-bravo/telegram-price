@@ -226,14 +226,31 @@ En plataformas cloud con almacenamiento efímero (donde los discos se reinician 
 3. **Push tras cambios web:** Si editas productos o ajustas parámetros desde el panel web, el cambio se sube inmediatamente a GitHub.
 4. **Sincronización con tu PC:** Solo necesitas ejecutar `git pull` en tu ordenador para tener todo tu historial y estado actualizados localmente.
 
+### 🔑 Cómo generar el Token en GitHub (Fine-Grained PAT para este repositorio)
+
+Para que el contenedor tenga permisos de lectura y escritura exclusivamente en este repositorio sin comprometer el resto de tu cuenta de GitHub:
+
+1. Entra directamente en: 👉 **[Tokens de GitHub (Fine-grained)](https://github.com/settings/tokens?type=beta)**
+   *(O desde GitHub: pulsa en tu foto de perfil → **Settings** → **Developer Settings** → **Personal access tokens** → **Fine-grained tokens**)*.
+2. Haz clic en **Generate new token**.
+3. Rellena los datos básicos:
+   * **Token name:** Ej. `telegram-price-sync`
+   * **Expiration:** Selecciona la caducidad deseada (ej. `90 days` o `1 year`).
+   * **Resource owner:** Tu usuario de GitHub (`antonio-bravo`).
+4. **Acceso al repositorio (Seguridad):**
+   * En la sección **Repository access**, selecciona **"Only select repositories"**.
+   * En el selector desplegable, busca y marca únicamente: `telegram-price`.
+5. **Permisos necesarios:**
+   * Despliega la sección **Repository permissions**.
+   * Busca la fila **Contents** y cambia el desplegable a **Read and write** (permite leer y hacer commits/push de `config.json`, `historico.csv` y `monitor_state.json`).
+   * *(No necesitas activar ningún otro permiso adicional)*.
+6. Pulsa el botón verde **Generate token** al final de la página y copia el token generado (empieza por `github_pat_...`).
+
+---
+
 ### Despliegue en Render.com (Paso a Paso)
 
-1. **Crear Token de GitHub (PAT):**
-   * En GitHub ve a **Settings** → **Developer Settings** → **Personal Access Tokens** → **Fine-grained tokens**.
-   * Pulsa **Generate new token**.
-   * Dale un nombre y selecciona tu repositorio `telegram-price`.
-   * En **Repository permissions**, activa **Contents** con permiso **Read and write**.
-   * Guarda el token (`github_pat_...`).
+1. **Token de GitHub listo:** Asegúrate de haber generado el token del paso anterior.
 
 2. **Crear Web Service en Render:**
    * Entra en [Render.com](https://render.com) y crea un nuevo **Web Service**.

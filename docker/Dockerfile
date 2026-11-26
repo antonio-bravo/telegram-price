@@ -10,10 +10,29 @@ WORKDIR /app
 COPY requirements.txt .
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl ca-certificates tzdata \
+        curl \
+        ca-certificates \
+        tzdata \
+        libnss3 \
+        libnspr4 \
+        libatk1.0-0 \
+        libatk-bridge2.0-0 \
+        libcups2 \
+        libdrm2 \
+        libxkbcommon0 \
+        libxcomposite1 \
+        libxdamage1 \
+        libxfixes3 \
+        libxrandr2 \
+        libgbm1 \
+        libasound2 \
+        libpango-1.0-0 \
+        libcairo2 \
+    && pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium \
-    && apt-get autoremove -y && apt-get clean \
+    && apt-get autoremove -y \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 COPY monitor.py web_app.py github_sync.py ./

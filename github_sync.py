@@ -17,8 +17,17 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
+def limpiar_repo(repo_str):
+    if not repo_str:
+        return ""
+    s = repo_str.strip()
+    for prefix in ["https://github.com/", "http://github.com/", "git@github.com:", "github.com/"]:
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+    return s.removesuffix(".git").strip("/")
+
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
-GITHUB_REPO = os.getenv("GITHUB_REPO", "").strip()
+GITHUB_REPO = limpiar_repo(os.getenv("GITHUB_REPO", ""))
 GITHUB_BRANCH = os.getenv("GITHUB_BRANCH", "main").strip()
 
 def esta_activo():

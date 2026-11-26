@@ -1223,7 +1223,26 @@ class WebHandler(BaseHTTPRequestHandler):
         # Silenciar logs ruidosos en stdout
         return
 
+    def do_HEAD(self):
+        url = urlparse(self.path)
+        path = url.path.rstrip("/")
+        if path in ("", "/index.html", "/healthz", "/health"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain")
+            self.end_headers()
+            return
+        if not self.check_auth():
+            return
+        self.send_response(200)
+        self.end_headers()
+
     def check_auth(self):
+        url = urlparse(self.path)
+        path = url.path.rstrip("/")
+        # Los endpoints de comprobación de salud nunca requieren autenticación (vital para Render / Cloud)
+        if path in ("/healthz", "/health"):
+            return True
+
         if not AUTH_ENABLED:
             return True
         auth_header = self.headers.get("Authorization")
@@ -1241,6 +1260,7 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.end_headers()
         self.wfile.write(b'{"ok": false, "error": "401 Unauthorized: Credenciales incorrectas o ausentes."}')
+        self.wfile.flush()
         return False
 
     def send_json(self, data, status=200):
@@ -1251,13 +1271,23 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
         self.wfile.write(body)
+        self.wfile.flush()
 
     def do_GET(self):
-        if not self.check_auth():
-            return
-
         url = urlparse(self.path)
         path = url.path.rstrip("/")
+
+        # Health check para Render, Fly.io, Kubernetes y balanceadores
+        if path in ("/healthz", "/health"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"OK")
+            self.wfile.flush()
+            return
+
+        if not self.check_auth():
+            return
 
         if path == "" or path == "/index.html":
             body = HTML_PAGE.encode("utf-8")
@@ -1266,6 +1296,7 @@ class WebHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
             return
 
         if path == "/api/config":
@@ -1399,5 +1430,6 @@ def run_server(port=9999):
 
 
 if __name__ == "__main__":
-    puerto = int(os.getenv("WEB_PORT", os.getenv("PORT", 9999)))
+    # PORT (proporcionado por Render/Fly.io/Heroku) tiene prioridad máxima sobre WEB_PORT
+    puerto = int(os.getenv("PORT", os.getenv("WEB_PORT", 9999)))
     run_server(puerto)

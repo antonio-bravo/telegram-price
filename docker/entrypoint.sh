@@ -87,17 +87,19 @@ echo "⏱️ Frecuencia configurada: Cada ${INTERVAL} minutos"
 
 # 5. Iniciar panel web frontend en segundo plano (muy liviano, ~10 MB RAM)
 if [ "${WEB_ENABLED:-true}" = "true" ]; then
-    WEB_PORT="${PORT:-${WEB_PORT:-9999}}"
-    export WEB_PORT
-    echo "🌐 Iniciando panel web en http://0.0.0.0:$WEB_PORT ..."
+    TARGET_PORT="${PORT:-${WEB_PORT:-9999}}"
+    export PORT="$TARGET_PORT"
+    export WEB_PORT="$TARGET_PORT"
+    echo "🌐 Iniciando panel web en http://0.0.0.0:$TARGET_PORT ..."
     python web_app.py &
 fi
 
-# 5. Ejecución inicial opcional al arrancar el contenedor
+# 6. Ejecución inicial opcional al arrancar el contenedor
+# Se lanza en segundo plano tras 2 segundos para permitir que el servidor web responda de inmediato a los Health Checks de la nube
 if [ "${RUN_ON_STARTUP:-true}" = "true" ]; then
     echo ""
-    echo "🚀 [$(date '+%Y-%m-%d %H:%M:%S')] Ejecutando primera ronda de comprobación al iniciar..."
-    python monitor.py || echo "⚠️ Error en la ejecución (el contenedor continuará su programación)..."
+    echo "🚀 [$(date '+%Y-%m-%d %H:%M:%S')] Programando primera ronda de comprobación en segundo plano..."
+    ( sleep 2 && python monitor.py || echo "⚠️ Error en la ejecución inicial del monitor" ) &
 fi
 
 # 6. Bucle de ejecución periódica con detección dinámica de cambios

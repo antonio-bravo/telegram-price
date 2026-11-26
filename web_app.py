@@ -1160,7 +1160,7 @@ HTML_PAGE = """<!DOCTYPE html>
 
         const terminal = document.getElementById('terminal');
         if (st.logs && st.logs.length > 0) {
-          terminal.innerText = st.logs.join('\n');
+          terminal.innerText = st.logs.join('\\n');
           terminal.scrollTop = terminal.scrollHeight;
         }
       } catch (e) {}

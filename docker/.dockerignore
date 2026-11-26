@@ -10,3 +10,5 @@ env/
 *.md
 .github/
 data/
+*.csv
+monitor_state.json

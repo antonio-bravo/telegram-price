@@ -7,8 +7,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY requirements.txt .
-
+# 1. Dependencias del sistema para Chromium Headless (Capa inmutable -> 100% Cache Hit)
 RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
@@ -28,12 +27,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libasound2 \
         libpango-1.0-0 \
         libcairo2 \
-    && pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt \
-    && playwright install --with-deps chromium \
-    && apt-get autoremove -y \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# 2. Dependencias de Python y navegador Chromium (Solo se reconstruye si cambia requirements.txt)
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && playwright install chromium \
+    && find /root/.cache/ms-playwright -type d -name "locales" -exec sh -c 'cd "$1" && ls | grep -v -E "(en-US|es)\.pak" | xargs rm -f' _ {} \; 2>/dev/null || true \
+    && rm -rf /root/.cache/pip /tmp/*
 
 COPY monitor.py web_app.py github_sync.py ./
 COPY config.json /app/config.json.default

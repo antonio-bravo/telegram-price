@@ -49,6 +49,20 @@ services:
       - WEB_PORT=9999
       - WEB_ENABLED=true
 
+      # ============================================================
+      # AUTENTICACIÓN WEB OPCIONAL (HTTP Basic Auth)
+      # ============================================================
+      # Descomenta y asigna si deseas proteger el acceso web con contraseña:
+      # - AUTH_USER=admin
+      # - AUTH_PASSWORD=tu_password_segura
+
+      # ============================================================
+      # SINCRONIZACIÓN CON GITHUB (OPCIONAL / RENDER.COM / NUBE)
+      # ============================================================
+      # - GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+      # - GITHUB_REPO=antonio-bravo/telegram-price
+      # - GITHUB_BRANCH=main
+
       # Zona horaria para las fechas y horas del registro
       - TZ=Europe/Madrid
       - PYTHONUNBUFFERED=1

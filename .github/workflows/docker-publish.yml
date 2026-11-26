@@ -7,6 +7,7 @@ on:
     paths:
       - "monitor.py"
       - "web_app.py"
+      - "github_sync.py"
       - "requirements.txt"
       - "docker/**"
       - ".github/workflows/docker-publish.yml"

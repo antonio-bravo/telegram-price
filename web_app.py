@@ -10,6 +10,7 @@ import os
 import sys
 import json
 import csv
+import base64
 import subprocess
 import threading
 import time
@@ -17,6 +18,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+
+try:
+    import github_sync
+except ImportError:
+    github_sync = None
+
+# ============================================================
+# AUTENTICACIÓN BÁSICA OPCIONAL
+# ============================================================
+AUTH_USER = os.getenv("AUTH_USER", os.getenv("WEB_USER", "")).strip()
+AUTH_PASSWORD = os.getenv("AUTH_PASSWORD", os.getenv("WEB_PASSWORD", "")).strip()
+AUTH_ENABLED = bool(AUTH_USER and AUTH_PASSWORD)
+
 
 # ============================================================
 # RESOLUCIÓN DE RUTAS (COINCIDENTE CON MONITOR.PY)
@@ -113,6 +127,12 @@ def guardar_config(datos):
                 json.dump(datos, f, indent=2, ensure_ascii=False)
             if temp.exists():
                 temp.unlink()
+        if github_sync and github_sync.esta_activo():
+            threading.Thread(
+                target=github_sync.subir_archivo_github,
+                args=("config.json", CONFIG_FILE, "Web: Actualizar config.json [skip ci]"),
+                daemon=True
+            ).start()
         return True, "Configuración guardada correctamente"
     except Exception as e:
         return False, str(e)
@@ -154,6 +174,12 @@ def guardar_estado(datos):
                 json.dump(datos, f, indent=2, ensure_ascii=False)
             if temp.exists():
                 temp.unlink()
+        if github_sync and github_sync.esta_activo():
+            threading.Thread(
+                target=github_sync.subir_archivo_github,
+                args=("monitor_state.json", STATE_FILE, "Web: Actualizar monitor_state.json [skip ci]"),
+                daemon=True
+            ).start()
         return True, "Estado guardado"
     except Exception as e:
         return False, str(e)
@@ -521,8 +547,13 @@ HTML_PAGE = """<!DOCTYPE html>
       <h1>🔍 Monitor de Precios</h1>
       <span id="badge-interval" class="status-badge" style="background: rgba(88, 166, 255, 0.15); color: #58a6ff; border-color: rgba(88, 166, 255, 0.3);">⏱️ Cada 60m</span>
       <span id="badge-running" class="status-badge">Listo</span>
+      <span id="badge-auth" class="status-badge" style="display:none; background: rgba(210, 153, 34, 0.15); color: #e3b341; border-color: rgba(210, 153, 34, 0.4);">🔒 Protegido</span>
+      <span id="badge-gh" class="status-badge" style="display:none; background: rgba(139, 148, 158, 0.15); color: #c9d1d9; border-color: rgba(139, 148, 158, 0.4);">🐙 GitHub Sync</span>
     </div>
     <div class="actions-top">
+      <button id="btn-sync-gh" onclick="sincronizarGitHub()" style="display:none;" title="Sincronizar cambios desde GitHub">
+        <span>🐙</span> Sync GitHub
+      </button>
       <button onclick="ejecutarMonitor()" class="primary" id="btn-run">
         <span>▶️</span> Comprobar Ahora
       </button>
@@ -1116,12 +1147,47 @@ HTML_PAGE = """<!DOCTYPE html>
           btn.disabled = false;
         }
 
+        const bAuth = document.getElementById('badge-auth');
+        if (bAuth) bAuth.style.display = st.auth_activa ? 'inline-block' : 'none';
+
+        const bGh = document.getElementById('badge-gh');
+        const btnGh = document.getElementById('btn-sync-gh');
+        if (bGh) {
+          bGh.style.display = st.github_sync ? 'inline-block' : 'none';
+          if (st.github_repo) bGh.title = 'Repo: ' + st.github_repo;
+        }
+        if (btnGh) btnGh.style.display = st.github_sync ? 'inline-flex' : 'none';
+
         const terminal = document.getElementById('terminal');
         if (st.logs && st.logs.length > 0) {
-          terminal.innerText = st.logs.join('\\n');
+          terminal.innerText = st.logs.join('\n');
           terminal.scrollTop = terminal.scrollHeight;
         }
       } catch (e) {}
+    }
+
+    async function sincronizarGitHub() {
+      const btn = document.getElementById('btn-sync-gh');
+      btn.disabled = true;
+      const originalText = btn.innerHTML;
+      btn.innerText = "⏳ Sincronizando...";
+      try {
+        const res = await fetch('/api/github/sync', { method: 'POST' });
+        const d = await res.json();
+        if (d.ok) {
+          mostrarToast(d.mensaje || "Sincronizado desde GitHub");
+          await cargarConfig();
+          await cargarHistorial();
+          await cargarEstado();
+        } else {
+          alert("⚠️ " + (d.mensaje || d.error || "No se pudo sincronizar"));
+        }
+      } catch (e) {
+        alert("Error de conexión al sincronizar con GitHub: " + e);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = originalText;
+      }
     }
 
     function limpiarConsola() {
@@ -1157,6 +1223,26 @@ class WebHandler(BaseHTTPRequestHandler):
         # Silenciar logs ruidosos en stdout
         return
 
+    def check_auth(self):
+        if not AUTH_ENABLED:
+            return True
+        auth_header = self.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Basic "):
+            try:
+                encoded = auth_header.split(" ", 1)[1].strip()
+                decoded = base64.b64decode(encoded).decode("utf-8")
+                user, passwd = decoded.split(":", 1)
+                if user == AUTH_USER and passwd == AUTH_PASSWORD:
+                    return True
+            except Exception:
+                pass
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="Price Monitor"')
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b'{"ok": false, "error": "401 Unauthorized: Credenciales incorrectas o ausentes."}')
+        return False
+
     def send_json(self, data, status=200):
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
@@ -1167,6 +1253,9 @@ class WebHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if not self.check_auth():
+            return
+
         url = urlparse(self.path)
         path = url.path.rstrip("/")
 
@@ -1193,12 +1282,19 @@ class WebHandler(BaseHTTPRequestHandler):
 
         if path == "/api/status":
             with EJECUCION_LOCK:
-                self.send_json(ESTADO_EJECUCION)
+                st = dict(ESTADO_EJECUCION)
+                st["auth_activa"] = AUTH_ENABLED
+                st["github_sync"] = github_sync.esta_activo() if github_sync else False
+                st["github_repo"] = github_sync.GITHUB_REPO if (github_sync and github_sync.esta_activo()) else None
+                self.send_json(st)
             return
 
         self.send_error(404, "Ruta no encontrada")
 
     def do_POST(self):
+        if not self.check_auth():
+            return
+
         url = urlparse(self.path)
         path = url.path.rstrip("/")
 
@@ -1223,6 +1319,20 @@ class WebHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(e)}, status=400)
             return
 
+        if path == "/api/github/sync":
+            if not (github_sync and github_sync.esta_activo()):
+                self.send_json({"ok": False, "mensaje": "GitHub Sync no está configurado (faltan variables GITHUB_TOKEN y GITHUB_REPO)."}, status=400)
+                return
+            try:
+                ok = github_sync.pull_todos()
+                self.send_json({
+                    "ok": ok,
+                    "mensaje": "Sincronización con GitHub completada exitosamente." if ok else "No se pudo sincronizar algunos archivos desde GitHub."
+                })
+            except Exception as e:
+                self.send_json({"ok": False, "error": str(e)}, status=500)
+            return
+
         if path == "/api/run":
             with EJECUCION_LOCK:
                 if ESTADO_EJECUCION["en_curso"]:
@@ -1236,6 +1346,9 @@ class WebHandler(BaseHTTPRequestHandler):
         self.send_error(404, "Ruta no encontrada")
 
     def do_DELETE(self):
+        if not self.check_auth():
+            return
+
         url = urlparse(self.path)
         path = url.path.rstrip("/")
 
@@ -1245,6 +1358,12 @@ class WebHandler(BaseHTTPRequestHandler):
                 cabecera = "fecha,producto_id,producto,tienda,pais,precio_producto,envio,envio_confirmado,total_unidad_con_envio,cantidad,total_pedido_con_envio,precio_unidad_medida,cumple_objetivo,url\n"
                 with open(HISTORY_FILE, "w", encoding="utf-8") as f:
                     f.write(cabecera)
+                if github_sync and github_sync.esta_activo():
+                    threading.Thread(
+                        target=github_sync.subir_archivo_github,
+                        args=("historico.csv", HISTORY_FILE, "Web: Vaciar historico.csv [skip ci]"),
+                        daemon=True
+                    ).start()
                 self.send_json({"ok": True, "mensaje": "Historial vaciado"})
             except Exception as e:
                 self.send_json({"ok": False, "error": str(e)}, status=500)
@@ -1266,6 +1385,8 @@ def run_server(port=9999):
     httpd = ThreadingHTTPServer(server_address, WebHandler)
     print("=" * 60)
     print(f"🚀 PANEL WEB ACTIVO en http://0.0.0.0:{port}")
+    print(f"🔒 Autenticación: {'Activada (Usuario: ' + AUTH_USER + ')' if AUTH_ENABLED else 'Desactivada (Público/Red Local)'}")
+    print(f"🐙 GitHub Sync:   {'Activo (' + github_sync.GITHUB_REPO + ')' if (github_sync and github_sync.esta_activo()) else 'Desactivado (Modo local)'}")
     print(f"📁 Configuración: {CONFIG_FILE}")
     print(f"📁 Histórico:     {HISTORY_FILE}")
     print(f"📁 Estado:        {STATE_FILE}")

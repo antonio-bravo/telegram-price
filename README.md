@@ -126,14 +126,154 @@ Puedes recibir las alertas por mensaje privado o en un grupo:
 
 ## 💻 Ejecución local (opcional)
 
-1. Instalar dependencias:
+1. Instalar dependencias del sistema y de Python:
    ```bash
    pip install -r requirements.txt
+   playwright install chromium
    ```
 
 2. Definir variables y ejecutar:
    ```bash
    export TELEGRAM_BOT_TOKEN="tu_token_aqui"
    export TELEGRAM_CHAT_ID="tu_chat_id_aqui"
-   python monitor.py --force
+   python monitor.py
    ```
+
+3. (Opcional) Iniciar el panel web de control:
+   ```bash
+   python web_app.py
+   ```
+
+---
+
+## 🌐 Panel Web de Control
+
+El monitor incluye un servidor web ultraligero integrado (desarrollado con la librería estándar de Python, consumo ~10 MB RAM) accesible en el puerto `9999` (o el puerto configurado):
+
+* **📦 Gestión visual de productos:** Añade, edita, pausa o elimina productos en `config.json` directamente desde tu navegador o móvil sin tocar ficheros.
+* **📊 Visor de histórico (`historico.csv`):** Consulta todas las observaciones registradas, con buscador en tiempo real, filtros y botones con enlace directo a la oferta.
+* **🧠 Visor de estado (`monitor_state.json`):** Revisa qué ofertas están registradas para evitar alertas repetidas, con opción de eliminar alertas individuales o resetear el estado.
+* **▶️ Comprobación bajo demanda:** Botón para ejecutar el rastreo manualmente en cualquier momento.
+* **💻 Consola de logs en vivo:** Visualiza la salida del monitor en tiempo real.
+* **🔒 Autenticación opcional (HTTP Basic Auth):** Protege el acceso al panel configurando `AUTH_USER` y `AUTH_PASSWORD`. Si no se definen, el panel permanece abierto para acceso directo en tu red local.
+
+---
+
+## 🐳 Despliegue con Docker (NAS / Synology / Servidor Local)
+
+El proyecto cuenta con una imagen Docker oficial y precompilada en GitHub Container Registry para arquitecturas **amd64** y **arm64**:
+`ghcr.io/antonio-bravo/telegram-price:latest`
+
+### Despliegue con Docker Compose
+
+1. Crea una carpeta en tu servidor o NAS y coloca este archivo `docker-compose.yml`:
+
+```yaml
+version: "3.8"
+
+services:
+  price-monitor:
+    image: ghcr.io/antonio-bravo/telegram-price:latest
+    container_name: price-monitor
+    restart: unless-stopped
+    pull_policy: always
+    ports:
+      - "9999:9999"
+    environment:
+      - TELEGRAM_BOT_TOKEN=tu_bot_token_aqui
+      - TELEGRAM_CHAT_ID=tu_chat_id_aqui
+      - CHECK_INTERVAL_MINUTES=60
+      - RUN_ON_STARTUP=true
+      - MODO_RESIDENCIAL=true
+      - WEB_PORT=9999
+      - WEB_ENABLED=true
+      - TZ=Europe/Madrid
+      # Autenticación opcional para el panel web:
+      # - AUTH_USER=admin
+      # - AUTH_PASSWORD=tu_password_secreta
+    volumes:
+      - ./data:/app/data
+
+  # Actualizaciones automáticas del contenedor
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: price-monitor-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Europe/Madrid
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_SCHEDULE=0 30 6 * * *
+```
+
+2. Arranca el servicio:
+   ```bash
+   docker compose up -d
+   ```
+
+3. Accede al panel web desde tu navegador: `http://<IP_DE_TU_NAS>:9999`.
+
+---
+
+## ☁️ Despliegue en la Nube (Render.com / Fly.io / Railway)
+
+En plataformas cloud con almacenamiento efímero (donde los discos se reinician en cada despliegue o reinicio), el monitor cuenta con **sincronización bidireccional automática con GitHub** usando la API REST oficial.
+
+### ¿Cómo funciona la sincronización?
+1. **Descarga al iniciar (Pull):** Al encender el contenedor, descarga automáticamente `config.json`, `monitor_state.json` e `historico.csv` desde tu repositorio.
+2. **Push tras rastreo:** Al terminar cada comprobación, sube las nuevas ofertas registradas a GitHub con un commit automático (`[skip ci]`).
+3. **Push tras cambios web:** Si editas productos o ajustas parámetros desde el panel web, el cambio se sube inmediatamente a GitHub.
+4. **Sincronización con tu PC:** Solo necesitas ejecutar `git pull` en tu ordenador para tener todo tu historial y estado actualizados localmente.
+
+### Despliegue en Render.com (Paso a Paso)
+
+1. **Crear Token de GitHub (PAT):**
+   * En GitHub ve a **Settings** → **Developer Settings** → **Personal Access Tokens** → **Fine-grained tokens**.
+   * Pulsa **Generate new token**.
+   * Dale un nombre y selecciona tu repositorio `telegram-price`.
+   * En **Repository permissions**, activa **Contents** con permiso **Read and write**.
+   * Guarda el token (`github_pat_...`).
+
+2. **Crear Web Service en Render:**
+   * Entra en [Render.com](https://render.com) y crea un nuevo **Web Service**.
+   * Conecta tu repositorio `antonio-bravo/telegram-price`.
+   * Render detectará el `Dockerfile` automáticamente.
+   * En la sección **Environment Variables**, añade:
+
+| Variable | Descripción | Ejemplo |
+| :--- | :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | Token de tu bot de Telegram | `123456789:ABC...` |
+| `TELEGRAM_CHAT_ID` | ID de tu chat o grupo | `-100xxxxxxxxxx` |
+| `AUTH_USER` | Usuario para el panel web (opcional) | `admin` |
+| `AUTH_PASSWORD` | Contraseña para el panel web (opcional) | `tu_password_segura` |
+| `GITHUB_TOKEN` | Token personal de GitHub generado en el paso 1 | `github_pat_...` |
+| `GITHUB_REPO` | Tu repositorio en formato `usuario/repo` | `antonio-bravo/telegram-price` |
+| `GITHUB_BRANCH` | Rama de trabajo (opcional, por defecto `main`) | `main` |
+| `CHECK_INTERVAL_MINUTES` | Frecuencia de rastreo en minutos | `60` |
+| `RUN_ON_STARTUP` | Ejecutar al arrancar el contenedor | `true` |
+
+> [!TIP]
+> **Compatibilidad total con Render:** El contenedor detecta automáticamente la variable `$PORT` asignada dinámicamente por Render (habitualmente el puerto 10000), garantizando que las comprobaciones de salud (*Health Checks*) pasen inmediatamente.
+
+---
+
+## 📋 Resumen de Variables de Entorno
+
+| Variable | Por defecto | Descripción |
+| :--- | :--- | :--- |
+| `TELEGRAM_BOT_TOKEN` | *(Vacío)* | Token del bot de Telegram entregado por @BotFather. |
+| `TELEGRAM_CHAT_ID` | *(Vacío)* | ID numérico del chat o grupo donde enviar alertas. |
+| `AUTH_USER` | *(Vacío)* | Usuario para HTTP Basic Auth en el panel web (dejar vacío para desactivar auth). |
+| `AUTH_PASSWORD` | *(Vacío)* | Contraseña para HTTP Basic Auth en el panel web. |
+| `GITHUB_TOKEN` | *(Vacío)* | Token de GitHub para sincronización automática en la nube. |
+| `GITHUB_REPO` | *(Vacío)* | Repositorio remoto (`usuario/proyecto`) para persistencia. |
+| `GITHUB_BRANCH` | `main` | Rama de Git donde se sincronizan los commits. |
+| `CHECK_INTERVAL_MINUTES`| `60` | Minutos de espera entre cada rastreo automático. |
+| `RUN_ON_STARTUP` | `true` | Si es `true`, ejecuta un rastreo inmediato al iniciar el contenedor. |
+| `WEB_ENABLED` | `true` | Habilita o deshabilita el servidor del panel web. |
+| `WEB_PORT` / `PORT` | `9999` | Puerto de escucha del panel web (en Render toma `$PORT`). |
+| `DATA_DIR` | `/app/data` | Carpeta de persistencia para `config.json`, `historico.csv` y estado. |
+| `MODO_RESIDENCIAL` | `true` | Optimiza las peticiones para IPs residenciales/locales. |
+| `TZ` | `Europe/Madrid` | Zona horaria del sistema para los logs y registros temporales. |
+

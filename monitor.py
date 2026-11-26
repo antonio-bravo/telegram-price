@@ -1182,6 +1182,12 @@ async def main_async():
     print("=" * 60)
     print("MONITOR UNIVERSAL DE PRECIOS (OPTIMIZADO ASYNC)")
     print("=" * 60)
+    try:
+        import github_sync
+        if github_sync.esta_activo():
+            github_sync.pull_todos()
+    except Exception as e_gh:
+        print(f"⚠️ [GitHub Sync] Error al sincronizar al inicio: {e_gh}")
     config = cargar_configuracion()
     estado = cargar_estado()
     productos_activos = [p for p in config.get("productos", []) if p.get("activo", True)]
@@ -1209,6 +1215,13 @@ async def main_async():
         print("\n💾 Guardando estado y cerrando navegador...")
         await browser_mgr.stop()
         guardar_estado(estado)
+        try:
+            import github_sync
+            if github_sync.esta_activo():
+                github_sync.subir_archivo_github("historico.csv", HISTORY_FILE, "Monitor: Actualizar historico.csv [skip ci]")
+                github_sync.subir_archivo_github("monitor_state.json", STATE_FILE, "Monitor: Actualizar monitor_state.json [skip ci]")
+        except Exception as e_gh:
+            print(f"⚠️ [GitHub Sync] Error al subir archivos tras finalizar: {e_gh}")
         print("✅ Monitor finalizado correctamente.")
 
 if __name__ == "__main__":

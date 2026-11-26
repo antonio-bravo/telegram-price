@@ -39,6 +39,8 @@ RUN playwright install chromium
 
 COPY monitor.py .
 COPY web_app.py .
+COPY github_sync.py .
+COPY config.json /app/config.json.default
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 

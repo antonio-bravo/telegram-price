@@ -35,7 +35,7 @@
       "precio_maximo_pedido": null,
       "precio_maximo_por_unidad_medida": null,
       "cantidad": 1,
-      "activo": true
+      "activo": false
     },
     {
       "id": "8BitDo-64",

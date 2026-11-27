@@ -262,10 +262,15 @@ def es_articulo_disponible(texto, url):
 
     # 4. AMAZON (Disponibilidad principal)
     if "amazon." in url_lower:
-        patron_amz_no_disp = r'id=["\']availability["\'][^>]*>.*?[\'"]?(?:no disponible|agotado|currently unavailable|out of stock|temporarily out of stock|derzeit nicht verfügbar|nicht auf lager|actuellement indisponible|temporairement en rupture|attualmente non disponibile)[\'"]?'
-        if re.search(patron_amz_no_disp, texto_lower, re.DOTALL):
-            if not re.search(r'/gp/offer-listing/|/dp-olp/', texto_lower):
-                return False
+        m_avail = re.search(r'id=["\']availability["\'][^>]*>(.{0,800}?)</div>', texto_lower, re.DOTALL)
+        if m_avail:
+            avail_text = re.sub(r'<[^>]+>', ' ', m_avail.group(1))
+            avail_text = re.sub(r'\s+', ' ', avail_text).strip()
+            patron_amz_no_disp = r'\b(?:no disponible|agotado|currently unavailable|out of stock|temporarily out of stock|derzeit nicht verfügbar|nicht auf lager|actuellement indisponible|temporairement en rupture|attualmente non disponibile)\b'
+            if re.search(patron_amz_no_disp, avail_text):
+                # Si hay botón de añadir al carrito o enlaces a ofertas de otros vendedores (OLP), sigue disponible
+                if not re.search(r'id=["\']add-to-cart-button["\']|/gp/offer-listing/|/dp-olp/', texto_lower):
+                    return False
 
     return True
 
@@ -996,10 +1001,10 @@ class BrowserManager:
             )
             page = await context.new_page()
             try:
-                # Bloquear descargas pesadas (imágenes, medios, fuentes) para carga ultrarrápida y evitar timeouts
+                # Bloquear descargas pesadas (imágenes, medios, fuentes, CSS) para carga ultrarrápida y menor consumo de RAM
                 await page.route(
                     "**/*",
-                    lambda route: route.abort() if route.request.resource_type in ["image", "media", "font"] else route.continue_()
+                    lambda route: route.abort() if route.request.resource_type in ["image", "media", "font", "stylesheet"] else route.continue_()
                 )
                 await page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
                 await page.goto(url, wait_until='domcontentloaded', timeout=25000)
@@ -1111,9 +1116,9 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
     try:
         with DDGS() as buscador:
             for i, (consulta, region) in enumerate(consultas):
-                if i > 0: await asyncio.sleep(random.uniform(0.5, 1.0))
+                if i > 0: await asyncio.sleep(random.uniform(0.8, 1.5))
                 try:
-                    encontrados = list(buscador.text(consulta, region=region, max_results=10))
+                    encontrados = await asyncio.to_thread(buscar_en_ddgs, buscador, consulta, region)
                 except Exception:
                     continue
 
@@ -1137,8 +1142,9 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                     ]
                     if any(no_tienda in domain for no_tienda in dominios_no_tienda): continue
                     
-                    # FILTRO 3: URLs ya vistas
-                    if url in vistos: continue
+                    # FILTRO 3: URLs ya vistas/consultadas (evita consultar el mismo producto varias veces por búsqueda)
+                    dedup_key = clave_deduplicacion_url(url)
+                    if url in vistos or dedup_key in vistos: continue
                     
                     # FILTRO 4: Validación estricta de URL de producto (usa tu función existente)
                     if not es_url_producto_valida(url, domain): continue
@@ -1157,16 +1163,17 @@ async def buscar_producto_async(producto, pais_default, config, browser_mgr):
                     if tokens_relevantes and not any(t in ddg_texto for t in tokens_relevantes):
                         continue
 
+                    vistos.add(url)
+                    vistos.add(dedup_key)
                     tasks_ddg.append(consultar_url_async(url, producto, config, browser_mgr, semaphore))
 
                 if tasks_ddg:
                     resultados_ddg = await asyncio.gather(*tasks_ddg, return_exceptions=True)
                     for res in resultados_ddg:
-                        if isinstance(res, dict) and res and res["url"] not in vistos:
+                        if isinstance(res, dict) and res:
                             if es_resultado_valido(producto, res["titulo"], "", res["precio"], config, res["url"]):
                                 print(f"   🎯 Oferta válida [{producto['nombre']}]: {res['precio']:.2f} € en {res['tienda_nombre']} -> {res['titulo'][:60]}")
                                 resultados.append(res)
-                                vistos.add(res["url"])
                             else:
                                 print(f"   🚫 Descartado por filtro [{producto['nombre']}]: '{res['titulo'][:50]}' ({res['precio']:.2f} € en {res['tienda_nombre']})")
                                 

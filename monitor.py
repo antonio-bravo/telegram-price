@@ -132,11 +132,72 @@ def convertir_numero(texto):
 
 def extraer_precio_amazon(texto):
     if not texto: return None
-    # 1. Inputs ocultos oficiales del precio del producto principal de Amazon
+
+    def _extraer_de_snippet(snippet):
+        # Evitar precios tachados (PVP recomendado / basisPrice) o precios sin IVA
+        snippet_lower = snippet.lower()
+        if any(bad in snippet_lower[:120] for bad in ["basisprice", "a-text-price", "taxexclusive", "sin iva", "excl. vat", "ohne mwst"]):
+            return None
+        m_off = re.search(r"""class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", snippet, re.IGNORECASE)
+        if m_off and re.search(r'\d', m_off.group(1)):
+            try:
+                val = convertir_numero(m_off.group(1))
+                if 1 <= val <= 100000: return val
+            except ValueError: pass
+        m_whole = re.search(r"""class=["\x27]a-price-whole["\x27][^>]*>(\d+).*?class=["\x27]a-price-fraction["\x27][^>]*>(\d+)""", snippet, re.DOTALL | re.IGNORECASE)
+        if m_whole:
+            try:
+                val = float(f"{m_whole.group(1)}.{m_whole.group(2)}")
+                if 1 <= val <= 100000: return val
+            except ValueError: pass
+        return None
+
+    # 1. PRIORIDAD MÁXIMA: Precio visible real a pagar (priceToPay / reinventPricePriceToPayMargin / apex-pricetopay-value)
+    # Esto evita leer precios base sin IVA ocultos en inputs twister o precios tachados
+    for id_contenedor in ["corePriceDisplay_desktop_feature_div", "corePrice_desktop", "apex_desktop", "desktop_buybox", "buybox", "corePrice_feature_div"]:
+        pos = texto.find(id_contenedor)
+        if pos != -1:
+            zona = texto[pos:pos+6000]
+            for cls in ["priceToPay", "reinventPricePriceToPayMargin", "apex-pricetopay-value"]:
+                pos_cls = zona.find(cls)
+                if pos_cls != -1:
+                    val = _extraer_de_snippet(zona[max(0, pos_cls-50):pos_cls+1500])
+                    if val is not None: return val
+
+    # 2. Clases directas de precio a pagar en cualquier punto del BuyBox
+    for cls in ["priceToPay", "reinventPricePriceToPayMargin", "apex-pricetopay-value"]:
+        pos = texto.find(cls)
+        if pos != -1:
+            val = _extraer_de_snippet(texto[max(0, pos-50):pos+1500])
+            if val is not None: return val
+
+    # 3. Input oficial de precio visible para el cliente (siempre incluye IVA)
+    m_cust = re.search(r"""<input[^>]+name=["\x27]items\[0\.base\]\[customerVisiblePrice\]\[amount\]["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""", texto, re.IGNORECASE)
+    if m_cust:
+        try:
+            val = convertir_numero(m_cust.group(1))
+            if 1 <= val <= 100000: return val
+        except ValueError: pass
+
+    # 4. Contenedores principales de precio de Amazon (fallback si no tiene clase priceToPay)
+    for id_contenedor in ["corePriceDisplay_desktop_feature_div", "corePrice_desktop", "apex_desktop", "desktop_buybox", "buybox", "corePrice_feature_div"]:
+        pos = texto.find(id_contenedor)
+        if pos != -1:
+            val = _extraer_de_snippet(texto[pos:pos+4000])
+            if val is not None: return val
+
+    # 5. Selectores clásicos de Amazon
+    m_pb = re.search(r"""id=["\x27](?:priceblock_ourprice|priceblock_dealprice|price_inside_buybox)["\x27][^>]*>([^<]+)</span>""", texto, re.IGNORECASE)
+    if m_pb:
+        try:
+            val = convertir_numero(m_pb.group(1))
+            if 1 <= val <= 100000: return val
+        except ValueError: pass
+
+    # 6. Inputs ocultos y JSON de twister (último recurso porque a veces contienen precio neto sin IVA)
     patrones_input = [
         r"""<input[^>]+id=["\x27]twister-plus-price-data-price["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
         r"""<input[^>]+name=["\x27]priceValue["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
-        r"""<input[^>]+name=["\x27]items\[0\.base\]\[customerVisiblePrice\]\[amount\]["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
         r"""<input[^>]+id=["\x27]displayedPrice["\x27][^>]+value=["\x27]([\d.,]+)["\x27]""",
     ]
     for p in patrones_input:
@@ -147,7 +208,6 @@ def extraer_precio_amazon(texto):
                 if 1 <= val <= 100000: return val
             except ValueError: pass
 
-    # 2. JSON de twister-plus-buying-options-price-data
     m_twister = re.search(r"""twister-plus-buying-options-price-data["\x27][^>]*>(\{.*?\})</div>""", texto, re.DOTALL)
     if m_twister:
         m_amt = re.search(r"""["\x27]priceAmount["\x27]\s*:\s*([\d.]+)""", m_twister.group(1))
@@ -157,51 +217,7 @@ def extraer_precio_amazon(texto):
                 if 1 <= val <= 100000: return val
             except ValueError: pass
 
-    # 3. Contenedores de precio principal de Amazon (corePrice, apex, buybox)
-    for id_contenedor in ["corePriceDisplay_desktop_feature_div", "corePrice_desktop", "apex_desktop", "desktop_buybox", "buybox", "corePrice_feature_div"]:
-        pos = texto.find(id_contenedor)
-        if pos != -1:
-            snippet = texto[pos:pos+4000]
-            m_off = re.search(r"""class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", snippet, re.IGNORECASE)
-            if m_off:
-                try:
-                    val = convertir_numero(m_off.group(1))
-                    if 1 <= val <= 100000: return val
-                except ValueError: pass
-            m_whole = re.search(r"""class=["\x27]a-price-whole["\x27]>(\d+).*?class=["\x27]a-price-fraction["\x27]>(\d+)""", snippet, re.DOTALL | re.IGNORECASE)
-            if m_whole:
-                try:
-                    val = float(f"{m_whole.group(1)}.{m_whole.group(2)}")
-                    if 1 <= val <= 100000: return val
-                except ValueError: pass
-
-    # 4. Clases directas de precio principal (priceToPay, apex-pricetopay-value)
-    for cls in ["priceToPay", "apex-pricetopay-value", "reinventPricePriceToPayMargin"]:
-        pos = texto.find(cls)
-        if pos != -1:
-            snippet = texto[pos:pos+1500]
-            m_off = re.search(r"""class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", snippet, re.IGNORECASE)
-            if m_off:
-                try:
-                    val = convertir_numero(m_off.group(1))
-                    if 1 <= val <= 100000: return val
-                except ValueError: pass
-            m_whole = re.search(r"""class=["\x27]a-price-whole["\x27]>(\d+).*?class=["\x27]a-price-fraction["\x27]>(\d+)""", snippet, re.DOTALL | re.IGNORECASE)
-            if m_whole:
-                try:
-                    val = float(f"{m_whole.group(1)}.{m_whole.group(2)}")
-                    if 1 <= val <= 100000: return val
-                except ValueError: pass
-
-    # 5. Selectores clásicos de Amazon
-    m_pb = re.search(r"""id=["\x27](?:priceblock_ourprice|priceblock_dealprice|price_inside_buybox)["\x27][^>]*>([^<]+)</span>""", texto, re.IGNORECASE)
-    if m_pb:
-        try:
-            val = convertir_numero(m_pb.group(1))
-            if 1 <= val <= 100000: return val
-        except ValueError: pass
-
-    # 6. Ofertas de otros vendedores (OLP)
+    # 7. Ofertas de otros vendedores (OLP)
     m_olp = re.search(r"""href=["\x27][^"\x27]*(?:/gp/offer-listing/|/dp-olp/)[^"\x27]*["\x27][^>]*>.*?<span[^>]*class=["\x27][^"\x27]*a-offscreen[^"\x27]*["\x27][^>]*>([^<]+)</span>""", texto, re.DOTALL | re.IGNORECASE)
     if m_olp:
         try:
